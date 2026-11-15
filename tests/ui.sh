@@ -359,6 +359,27 @@ mrun_start
 type_text al
 pixel_is "sharp at scale 2: the row's first line" $((2 * (CX + 200))) $((2 * (CY + ROW0))) "$SEL"
 pixel_is "and its last" $((2 * (CX + 200))) $((2 * (CY + ROW0 + ROWH) - 1)) "$SEL"
+
+# The cursor comes at the window's scale, and in a buffer scale that divides its size:
+# Adwaita has 24, 30, 36, 48, 72 and 96 pixels, so at 5 it gives 96 for 24, and a
+# buffer scale of 5 would be a protocol error. A scale change reloads the cursor with
+# the pointer on the window, not only at the next enter.
+cursor_ok='[ "$(global cursor cw)" -gt 0 ] && [ $(($(global cursor cw) % $(global cursor cscale))) = 0 ] &&
+	[ $(($(global cursor ch) % $(global cursor cscale))) = 0 ]'
+do_input move $((2 * (CX + 100))) $((2 * (CY + 40)))   # vinput counts in pixels
+check "the cursor at scale 2" "$cursor_ok && [ \"\$(global cursor cscale)\" = 2 ]"
+CW2=$(global cursor cw)
+sed -i 's/outputScale: 2/outputScale: 5/' "$XDG_CONFIG_HOME/mwc/mwmrc"
+reload_mwc
+check "the output is scaled by 5" "[ \"\$(global output_HEADLESS-1 scale)\" = 500 ]"
+check "the cursor is reloaded with the pointer still on it" \
+	"$cursor_ok && [ \"\$(global cursor cw)\" != $CW2 ]"
+echo "cursor at scale 5: $(global cursor cw)x$(global cursor ch)@$(global cursor cscale)"
+# At 5 the window covers the output: a new one is entered at that scale.
+mrun_quit
+mrun_start
+do_input move $((5 * (CX + 20))) $((5 * (CY + 20)))
+check "a new window's cursor at scale 5 has a buffer scale that divides it" "$cursor_ok"
 mrun_quit
 
 [ "$("$MRUN" -v)" = "mrun $(sed -n 's/^#define MRUN_VERSION "\(.*\)"/\1/p' "$MRUN_DIR/version.h")" ] ||
