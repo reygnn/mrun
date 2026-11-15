@@ -23,7 +23,8 @@ On Ubuntu 26.04:
     mrun
 
 At the start mrun reads the programs in `$PATH`, and typing narrows the list: the exact
-name first, then names starting with the text, then names containing it, ignoring case.
+name first, as typed before in another case, then names starting with the text, then
+names containing it, ignoring case.
 It quits once it has started a program; one that can't be started leaves it open, with
 the reason in the status line.
 

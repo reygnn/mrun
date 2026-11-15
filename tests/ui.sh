@@ -50,6 +50,9 @@ ln -s alpha "$A/zeta"           # a link counts
 printf '#!/bin/sh\necho $$ >"%s/omega"\nexec /bin/sleep 60\n' "$MARKS" >"$A/omega"
 chmod +x "$A/omega"
 program "$A" gone
+program "$A" Gamma
+program "$A" gamma lowgamma
+program "$Z" Gamma othergamma   # the same name again, later in PATH
 PROGS=$A:$Z
 
 mrun_start() { # [PATH [directory]]
@@ -267,6 +270,25 @@ do_input key ctrl+u
 type_text alpha
 do_input key Return
 expect_ran "Ctrl+U clears" alpha ""
+
+# Names in another case sort next to each other: the same name twice is listed once,
+# and the one in the case typed goes first.
+mrun_start
+type_text gamma
+do_input key Return
+expect_ran "the name as typed before another case" lowgamma ""
+mrun_start
+do_input key shift+g
+type_text amma
+do_input key Return
+expect_ran "and the other way round" Gamma ""
+mrun_start
+type_text gam
+do_input key Down
+do_input key Down
+do_input key Down
+do_input key Return
+expect_ran "the same name in another case is listed once" lowgamma ""
 
 # A compose sequence of its own, from plain keys: q then a is "alpha".
 printf '<q> <a> : "alpha"\n' >"$SMOKE_DIR/Compose"

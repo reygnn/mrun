@@ -275,13 +275,16 @@ static void update_matches(void)
 	memcpy(q, line, qlen);
 	q[qlen] = 0;
 	nmatches = 0;
-	for (int rank = 0; rank < 3; rank++) {
+	/* The exact name as typed goes before the same in another case. */
+	for (int rank = 0; rank < 4; rank++) {
 		for (int i = 0; i < nnames; i++) {
 			const char *n = progs[i].name;
 			int is_prefix = !strncasecmp(n, q, qlen);
 			int is_exact = is_prefix && !n[qlen];
-			if (rank == 0 ? is_exact :
-			    rank == 1 ? is_prefix && !is_exact :
+			int as_typed = is_exact && !strcmp(n, q);
+			if (rank == 0 ? as_typed :
+			    rank == 1 ? is_exact && !as_typed :
+			    rank == 2 ? is_prefix && !is_exact :
 			    !is_prefix && strcasestr(n, q))
 				matches[nmatches++] = i;
 		}
