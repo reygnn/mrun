@@ -72,6 +72,19 @@ defaults. The text is `Mwm*foreground` where it is set, else black or white, whi
 reads better.
 
 
+## How this is built
+
+mrun is developed with Claude (Anthropic) as a coding assistant. I set the scope and the
+design and review the changes; Claude writes most of the code and the tests. The checks:
+
+* `make test` drives mrun under a headless mwc with a simulated mouse and keyboard and
+  checks with small test programs in its `PATH` what it started and with which
+  arguments, as well as its colours and its drawing on a scaled output.
+* Every fix comes with a test that fails without it, checked by taking the fix out.
+* What is left open is written down rather than hidden: see CAVEATS, and the reviews
+  in `docs/history`.
+
+
 ## Testing
 
     make test
