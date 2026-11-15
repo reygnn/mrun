@@ -79,6 +79,8 @@ static char status_msg[256];
 static uint32_t last_click_ms;
 static int last_click_row = -1;
 static int dirty = 1;
+static const char *test_state;  /* MRUN_TEST_STATE: where the tests read it */
+static unsigned keys_seen;      /* presses handled, to wait for in the tests */
 
 /* ---- Wayland ------------------------------------------------------------ */
 
@@ -115,6 +117,7 @@ static int float_w = 420, float_h = 320; /* the size of its own to go back to */
 static struct wl_pointer *pointer;
 static struct wl_surface *ptr_surface;
 static int ptr_x, ptr_y;
+static uint32_t seat_ver;
 static double axis_acc;
 static int axis_steps;
 static struct wl_surface *cursor_surf;
@@ -381,13 +384,40 @@ static void activate(void)
 	}
 }
 
+/* The name as the shell reads it: in single quotes if it has anything but
+ * letters, digits and a few harmless characters. */
+static size_t shell_word(const char *n, char *out, size_t size)
+{
+	if (!n[strspn(n, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	    "0123456789_+-.,:@%=/")])
+		return (size_t)snprintf(out, size, "%s", n);
+	size_t o = 0;
+	out[o++] = '\'';
+	for (; *n && o + 5 < size; n++) {
+		if (*n == '\'') {
+			memcpy(out + o, "'\\''", 4);
+			o += 4;
+		} else {
+			out[o++] = *n;
+		}
+	}
+	if (*n)
+		return size;    /* too long */
+	out[o++] = '\'';
+	out[o] = 0;
+	return o;
+}
+
 /* Puts the chosen name in place of the first word; what follows stays. */
 static void take_chosen(void)
 {
 	if (sel < 0)
 		return;
-	const char *n = progs[matches[sel]].name;
-	size_t old = first_word(), nl = strlen(n), rest = strlen(line) - old;
+	char n[sizeof line];
+	size_t nl = shell_word(progs[matches[sel]].name, n, sizeof n);
+	if (nl >= sizeof n)
+		return;
+	size_t old = first_word(), rest = strlen(line) - old;
 	int blank = !rest;
 	if (nl + rest + 2 > sizeof line)
 		return;
@@ -426,6 +456,11 @@ static struct shmbuf *buf_new(int w, int h)
 {
 	int stride = cairo_format_stride_for_width(CAIRO_FORMAT_RGB24, w);
 	size_t size = (size_t)stride * h;
+	/* A pool's size is an int32. */
+	if (stride <= 0 || size > INT32_MAX) {
+		fprintf(stderr, "mrun: a %dx%d buffer is too big\n", w, h);
+		exit(1);
+	}
 	struct shmbuf *b = calloc(1, sizeof *b);
 	int fd = memfd_create("mrun", MFD_CLOEXEC);
 	void *data = MAP_FAILED;
@@ -525,6 +560,8 @@ static int parse_color(const char *s, uint32_t *out)
 		s += 4;
 		for (int i = 0; i < 3; i++) {
 			char *end;
+			if (!isxdigit((unsigned char)*s))
+				return 0;       /* strtoul would take blanks, a sign, 0x */
 			unsigned long v = strtoul(s, &end, 16);
 			int digits = end - s;
 			if (digits < 1 || digits > 4 || *end != (i < 2 ? '/' : '\0'))
@@ -560,7 +597,12 @@ static char *mwmrc_get(const char *key, char *val, size_t n)
 		return NULL;
 	char *found = NULL;
 	size_t kl = strlen(key);
+	int cont = 0;           /* in the rest of a line longer than text_line */
 	while (fgets(text_line, sizeof text_line, f)) {
+		int was_cont = cont;
+		cont = !strchr(text_line, '\n') && !feof(f);
+		if (was_cont)
+			continue;
 		char *p = text_line;
 		while (isspace((unsigned char)*p))
 			p++;
@@ -733,8 +775,12 @@ static void paint(void)
 	cairo_clip(cr);
 	for (int i = top; i < nmatches && i < top + vis; i++) {
 		int y = ly + (i - top) * rowh;
-		if (i == sel)
-			fill(px_sel, lx + 1, y, lw - 2, rowh);
+		if (i == sel) {
+			/* As mwc arms a menu item: the active colour, raised. */
+			struct rect r = { lx + 1, y, lw - 2, rowh };
+			fill(px_sel, r.x, r.y, r.w, r.h);
+			bevel(r, 1);
+		}
 		text(i == sel ? xc_sel : xc_fg, lx + 5, y, rowh, lw - 10,
 			progs[matches[i]].name);
 	}
@@ -742,6 +788,10 @@ static void paint(void)
 
 	bevel(r_status, 0);
 	int sx = r_status.x + BEV + 4, sw = r_status.w - 2 * BEV - 8;
+	cairo_save(cr);
+	cairo_rectangle(cr, r_status.x + BEV, r_status.y + BEV, r_status.w - 2 * BEV,
+		r_status.h - 2 * BEV);
+	cairo_clip(cr);
 	if (status_msg[0]) {
 		text(xc_err, sx, r_status.y, r_status.h, sw, status_msg);
 	} else {
@@ -753,6 +803,7 @@ static void paint(void)
 			snprintf(s, sizeof s, "%d programs", nnames);
 		text(xc_dim, sx, r_status.y, r_status.h, sw, s);
 	}
+	cairo_restore(cr);
 }
 
 /* 0 if the compositor holds both buffers: try again after a release. */
@@ -764,6 +815,9 @@ static int draw(void)
 	cr = b->cr;
 	cairo_identity_matrix(cr);
 	cairo_scale(cr, scale, scale);
+	/* Glyph advances at the buffer's pixels, not rounded to the surface's. */
+	pango_cairo_update_context(cr, pango_layout_get_context(plo));
+	pango_layout_context_changed(plo);
 	paint();
 	cairo_surface_flush(b->cs);
 	if (frame)
@@ -959,7 +1013,8 @@ static void kb_keymap(void *data, struct wl_keyboard *k, uint32_t format,
 	close(fd);
 	if (s == MAP_FAILED)
 		return;
-	struct xkb_keymap *map = xkb_keymap_new_from_string(xkb, s,
+	/* Only up to size: the NUL at the end is a custom, not a rule. */
+	struct xkb_keymap *map = xkb_keymap_new_from_buffer(xkb, s, strnlen(s, size),
 		XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
 	munmap(s, size);
 	struct xkb_state *state = map ? xkb_state_new(map) : NULL;
@@ -998,6 +1053,7 @@ static void kb_key(void *data, struct wl_keyboard *k, uint32_t serial,
 			repeat_kc = 0;
 		return;
 	}
+	keys_seen++;
 	/* A modifier does not stop a key that is repeating. */
 	int repeats = xkb_keymap_key_repeats(kb_map, kc);
 	if (repeats)
@@ -1092,11 +1148,15 @@ static void ptr_button(void *data, struct wl_pointer *p, uint32_t serial,
 	}
 }
 
+static void ptr_frame(void *data, struct wl_pointer *p);
+
 static void ptr_axis(void *data, struct wl_pointer *p, uint32_t time,
 	uint32_t axis, wl_fixed_t value)
 {
 	if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
 		axis_acc += wl_fixed_to_double(value);
+	if (seat_ver < WL_POINTER_FRAME_SINCE_VERSION)
+		ptr_frame(data, p);     /* no frame comes to end the event */
 }
 
 static void ptr_axis_source(void *data, struct wl_pointer *p, uint32_t source)
@@ -1156,7 +1216,10 @@ static void seat_capabilities(void *data, struct wl_seat *s, uint32_t caps)
 		pointer = wl_seat_get_pointer(s);
 		wl_pointer_add_listener(pointer, &pointer_listener, NULL);
 	} else if (!want_ptr && pointer) {
-		wl_pointer_release(pointer);
+		if (seat_ver >= WL_POINTER_RELEASE_SINCE_VERSION)
+			wl_pointer_release(pointer);
+		else
+			wl_pointer_destroy(pointer);
 		pointer = NULL;
 		ptr_surface = NULL;
 	}
@@ -1164,7 +1227,10 @@ static void seat_capabilities(void *data, struct wl_seat *s, uint32_t caps)
 		keyboard = wl_seat_get_keyboard(s);
 		wl_keyboard_add_listener(keyboard, &keyboard_listener, NULL);
 	} else if (!want_kb && keyboard) {
-		wl_keyboard_release(keyboard);
+		if (seat_ver >= WL_KEYBOARD_RELEASE_SINCE_VERSION)
+			wl_keyboard_release(keyboard);
+		else
+			wl_keyboard_destroy(keyboard);
 		keyboard = NULL;
 		repeat_kc = 0;
 	}
@@ -1191,13 +1257,15 @@ static const struct xdg_wm_base_listener wm_base_listener = { wm_ping };
 static void registry_global(void *data, struct wl_registry *r, uint32_t name,
 	const char *iface, uint32_t ver)
 {
-	if (!strcmp(iface, wl_compositor_interface.name)) {
+	/* 4 for damage_buffer, and set_buffer_scale with it. */
+	if (!strcmp(iface, wl_compositor_interface.name) && ver >= 4) {
 		compositor = wl_registry_bind(r, name, &wl_compositor_interface,
 			MIN(ver, 6));
 	} else if (!strcmp(iface, wl_shm_interface.name)) {
 		shm = wl_registry_bind(r, name, &wl_shm_interface, 1);
 	} else if (!strcmp(iface, wl_seat_interface.name) && !seat) {
-		seat = wl_registry_bind(r, name, &wl_seat_interface, MIN(ver, 7));
+		seat_ver = MIN(ver, 7);
+		seat = wl_registry_bind(r, name, &wl_seat_interface, seat_ver);
 		wl_seat_add_listener(seat, &seat_listener, NULL);
 	} else if (!strcmp(iface, xdg_wm_base_interface.name)) {
 		wm_base = wl_registry_bind(r, name, &xdg_wm_base_interface,
@@ -1268,11 +1336,16 @@ static void cursor_load(void)
 {
 	if (cursor_scale == scale)
 		return;
+	/* The theme owns the buffer the cursor surface shows: off with it first. */
+	if (cursor_surf) {
+		wl_surface_attach(cursor_surf, NULL, 0, 0);
+		wl_surface_commit(cursor_surf);
+	}
 	if (cursor_theme)
 		wl_cursor_theme_destroy(cursor_theme);
 	cursor_theme = NULL;
 	cursor_img = NULL;
-	cursor_scale = scale;
+	cursor_scale = 0;       /* tried again at the next enter if it fails */
 	const char *s = getenv("XCURSOR_SIZE");
 	int size = s && atoi(s) > 0 ? atoi(s) : 24;
 	cursor_theme = wl_cursor_theme_load(getenv("XCURSOR_THEME"), size * scale, shm);
@@ -1284,6 +1357,7 @@ static void cursor_load(void)
 	if (!c)
 		return;
 	cursor_img = c->images[0];
+	cursor_scale = scale;
 	/* A theme has only some sizes: at scale 3 a 64 pixel image is what comes, and a
 	 * buffer scale that doesn't divide it is a protocol error. Then a smaller one. */
 	cursor_bscale = scale;
@@ -1380,6 +1454,26 @@ static void setup_window(void)
 	layout();
 }
 
+/* For the tests, as mwc's MWC_TEST_STATE: one "key value" per line, written
+ * whole and renamed into place, only when something changed. */
+static void state_write(void)
+{
+	static char last[2 * sizeof line + 512];
+	char now[sizeof last], tmp[PATH_MAX];
+	snprintf(now, sizeof now, "keys %u\nsel %d\ntop %d\nmatches %d\nvisible %d\n"
+		"line %s\nstatus %s\n", keys_seen, sel, top, nmatches, rows_vis(), line,
+		status_msg);
+	if (!strcmp(now, last) ||
+	    (size_t)snprintf(tmp, sizeof tmp, "%s.tmp", test_state) >= sizeof tmp)
+		return;
+	FILE *f = fopen(tmp, "w");
+	if (!f)
+		return;
+	fputs(now, f);
+	if (fclose(f) == 0 && rename(tmp, test_state) == 0)
+		strcpy(last, now);
+}
+
 static void lost_connection(void)
 {
 	fprintf(stderr, "mrun: lost the connection to the compositor: %s\n",
@@ -1401,6 +1495,7 @@ int main(int argc, char **argv)
 		return help ? 0 : 1;
 	}
 	setlocale(LC_ALL, "");
+	test_state = getenv("MRUN_TEST_STATE");
 
 	if (!(dpy = wl_display_connect(NULL))) {
 		fprintf(stderr, "mrun: cannot connect to a Wayland compositor\n");
@@ -1415,7 +1510,7 @@ int main(int argc, char **argv)
 	wl_registry_add_listener(registry, &registry_listener, NULL);
 	wl_display_roundtrip(dpy);
 	if (!compositor || !shm || !wm_base) {
-		fprintf(stderr, "mrun: the compositor lacks wl_compositor, wl_shm "
+		fprintf(stderr, "mrun: the compositor lacks wl_compositor 4, wl_shm "
 			"or xdg_wm_base\n");
 		return 1;
 	}
@@ -1445,6 +1540,8 @@ int main(int argc, char **argv)
 			dirty = 0;
 			need_commit = 0;
 		}
+		if (test_state)
+			state_write();
 
 		if (wl_display_prepare_read(dpy) != 0)
 			continue;       /* events arrived in the meantime */

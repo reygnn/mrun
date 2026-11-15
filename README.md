@@ -35,6 +35,9 @@ with a blank goes to `/bin/sh -c` as it is, so arguments and shell syntax work, 
 as `firefox --private-window` or `sleep 5; foot`. On an empty line Return does nothing
 until a program is chosen.
 
+Tab and a double click with arguments put the name in single quotes if the shell would
+read it otherwise, such as a name with a blank.
+
 Programs run in a session of their own, without a terminal: a terminal program such as
 `htop` is started as `foot htop`.
 
@@ -47,8 +50,8 @@ Programs run in a session of their own, without a terminal: a terminal program s
 |---|---|
 | typing | narrow the list |
 | Up, Down, Page Up, Page Down | choose a program |
-| Return | run |
-| Tab | take the chosen name, with a blank after it for arguments |
+| Return, Enter on the keypad | run |
+| Tab, Shift+Tab | take the chosen name, with a blank after it for arguments |
 | Left, Right, Home, End, Backspace, Delete | edit the line |
 | Ctrl+U | clear the line |
 | Esc, Ctrl+Q, Ctrl+W | quit |
@@ -74,8 +77,10 @@ reads better.
     make test
 
 runs mrun in a headless mwc with a simulated mouse and keyboard, and checks with small
-test programs in its `PATH` what it started and with which arguments, as well as its
-colours and its drawing on a scaled output. It needs a built mwc with `build/vinput`
+test programs in its `PATH` what it started and with which arguments, as well as the
+colours from the environment and mwmrc and its drawing on a scaled output. With
+`MRUN_TEST_STATE` set, mrun writes its line, list and status to that file for the
+test to read. It needs a built mwc with `build/vinput`
 and `build/pngtool` in `MWC_DIR` (by default `../mwc`), and grim. mwc's development
 box has all of it:
 

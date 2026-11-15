@@ -20,6 +20,14 @@ path and a blank they can still be started through the shell.
 
 ## Drawing
 
-It draws at the integer scale the compositor asks for with wl_compositor 6. A
+The status line is drawn between the background and the text colour, darker than
+mwc's dimmed menu items: it is a hint to be read, not something that can't be
+chosen.
+
+The chosen row is the active colour with a raised bevel, as an armed menu item in mwc,
+whose text keeps the menu's colour. mrun picks black or white for it by contrast
+unless `Mwm*foreground` is set.
+
+It needs wl_compositor 4. It draws at the integer scale the compositor asks for with wl_compositor 6. A
 fractional scale is drawn at the next integer and scaled down by the compositor; an
 older compositor never asks, and there the window stays at scale 1 and is blurred.
