@@ -1,68 +1,84 @@
-# mrun – minimaler Ausführen-Dialog für Wayland (passend zu mwc)
+# mrun
 
-Eine C-Datei, nur libwayland, xkbcommon, Cairo und Pango, kein Toolkit. Motif-Look wie
-[mfm](https://github.com/reygnn/mfm), mit denselben Farben wie
-[mwc](https://github.com/reygnn/mwc): `MWC_INACTIVE` / `MWC_ACTIVE` aus der Umgebung,
-sonst `Mwm*background` / `Mwm*activeBackground` aus `~/.config/mwc/mwmrc`.
+mrun is a run dialog for Wayland in the look of the Motif window manager. It is made
+for [mwc](https://github.com/reygnn/mwc), which opens it with the middle mouse button
+on the desktop, and runs on any Wayland compositor with xdg-shell. One C file on
+libwayland, xkbcommon, Cairo and Pango, no toolkit.
 
-mrun liest beim Start alle Programme aus `$PATH` und filtert beim Tippen: zuerst der
-exakte Name, dann Namen, die so anfangen, dann Namen, die es enthalten, Groß/klein egal.
-Nach dem Start eines Programms beendet es sich.
 
-## Bauen
+## Build
+
+On Ubuntu 26.04:
 
     sudo apt install build-essential pkg-config libwayland-dev wayland-protocols \
         libxkbcommon-dev libcairo2-dev libpango1.0-dev
     make
-    sudo make install        # -> /usr/local/bin/mrun
+    sudo make install
 
-In mwc startet es die mittlere Maustaste auf dem Desktop.
+`make install` puts `mrun` in `/usr/local/bin`.
 
-## Bedienung
 
-| Eingabe | Aktion |
+## Run
+
+    mrun
+
+At the start mrun reads the programs in `$PATH`, and typing narrows the list: the exact
+name first, then names starting with the text, then names containing it, ignoring case.
+It quits once it has started a program.
+
+Return runs one of two things. A line without a blank runs the chosen program directly,
+without a shell, so `fire` starts Firefox if that is the first match. Without a match
+the status line says so, unless the line has a `/`; then it goes to the shell. A line
+with a blank goes to `/bin/sh -c` as it is, so arguments and shell syntax work, such
+as `firefox --private-window` or `sleep 5; foot`. On an empty line Return does nothing
+until a program is chosen.
+
+Programs run in a session of their own, without a terminal: a terminal program such as
+`htop` is started as `foot htop`.
+
+`-v` prints the version, which is set in `version.h`.
+
+
+## Keys
+
+| Keys | Action |
 |---|---|
-| tippen | Liste filtern |
-| ↑ ↓ Bild↑ Bild↓ | Programm wählen |
-| Enter | starten |
-| Tab | gewählten Namen übernehmen, dahinter ein Leerzeichen für Argumente |
-| ← → Pos1 Ende Backspace Entf | Zeile bearbeiten |
-| Ctrl+U | Zeile leeren |
-| Esc / Ctrl+Q / Ctrl+W | beenden |
-| Klick / Doppelklick | wählen / starten |
-| Mausrad | Liste scrollen |
+| typing | narrow the list |
+| Up, Down, Page Up, Page Down | choose a program |
+| Return | run |
+| Tab | take the chosen name, with a blank after it for arguments |
+| Left, Right, Home, End, Backspace, Delete | edit the line |
+| Ctrl+U | clear the line |
+| Esc, Ctrl+Q, Ctrl+W | quit |
+| click, double click | choose, run |
+| wheel | scroll the list |
 
-**Was Enter startet:**
-- **Ohne Leerzeichen** das gewählte Programm, direkt und ohne Shell. So startet `fire`
-  schon Firefox, wenn es der erste Treffer ist. Ohne Treffer meldet die Statuszeile das,
-  außer die Zeile enthält einen `/`: Dann geht sie an die Shell.
-- **Mit Leerzeichen** die Zeile, so wie sie dasteht, mit `/bin/sh -c`. Argumente und
-  Shell-Syntax gehen also, etwa `firefox --private-window` oder `sleep 5; foot`.
-- **Bei leerer Zeile** nichts, solange nichts gewählt ist.
 
-Programme laufen in einer eigenen Sitzung und ohne Terminal. Reine Terminal-Programme wie
-`htop` startet man also so: `foot htop`. Ob ein Programm mit Leerzeichen-Zeile wirklich
-gestartet ist, sieht mrun nicht, es ist dann schon beendet.
+## Configuration
 
-Einträge in `$PATH`, die nicht absolut sind, zählen nicht. Namen, die kein gültiges UTF-8
-sind oder Steuerzeichen enthalten, erscheinen nicht in der Liste; mit Pfad und Leerzeichen
-lassen sie sich trotzdem starten.
-
-## Umgebung
-
-| Variable | Standard | |
+| Variable | Default | |
 |---|---|---|
-| `MRUN_FONT` | `Sans 10` | Pango-Name, z. B. `Sans Bold 11` |
-| `MWC_INACTIVE`, `MWC_ACTIVE` | `#aeb2c3`, `#7387ad` | Hintergrund, Auswahl |
+| `MRUN_FONT` | `Sans 10` | Pango font name, e.g. `Sans Bold 11` |
+| `MWC_INACTIVE`, `MWC_ACTIVE` | `#aeb2c3`, `#7387ad` | background, chosen row |
 
-## Tests
+The colours are mwc's: `MWC_INACTIVE` and `MWC_ACTIVE` from the environment, else
+`Mwm*background` and `Mwm*activeBackground` from `~/.config/mwc/mwmrc`, else the Motif
+defaults.
+
+
+## Testing
 
     make test
 
-fährt mrun unter einem headless laufenden mwc mit simulierter Maus und Tastatur und prüft
-mit kleinen Testprogrammen, was gestartet wurde. Es braucht einen gebauten mwc samt
-`build/vinput` und `build/pngtool` in `MWC_DIR` (sonst `../mwc` oder `../mwm`) und `grim`.
+runs mrun in a headless mwc with a simulated mouse and keyboard, and checks with small
+test programs in its `PATH` what it started and with which arguments, as well as its
+colours and its drawing on a scaled output. It needs a built mwc with `build/vinput`
+and `build/pngtool` in `MWC_DIR` (by default `../mwc`), and grim. mwc's development
+box has all of it:
 
-## Lizenz
+    distrobox enter mwc-dev -- make test
 
-MIT, siehe [LICENSE](LICENSE).
+
+## License
+
+MIT, see [LICENSE](LICENSE).
