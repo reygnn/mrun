@@ -47,6 +47,7 @@
 
 #include "xdg-decoration-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
+#include "version.h"
 
 #define BEV 2           /* bevel width, as in mwm */
 #define PAD 6
@@ -1309,8 +1310,12 @@ static void lost_connection(void)
 int main(int argc, char **argv)
 {
 	if (argc > 1) {
+		if (!strcmp(argv[1], "-v")) {
+			printf("mrun %s\n", MRUN_VERSION);
+			return 0;
+		}
 		int help = !strcmp(argv[1], "-h") || !strcmp(argv[1], "--help");
-		fprintf(stderr, "usage: mrun\n"
+		fprintf(stderr, "usage: mrun [-v]\n"
 			"Environment: MRUN_FONT (default \"Sans 10\"), "
 			"MWC_INACTIVE, MWC_ACTIVE.\n");
 		return help ? 0 : 1;

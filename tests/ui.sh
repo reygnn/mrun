@@ -3,16 +3,13 @@
 # of small programs here shows what was started, and with what. It has its own Wayland
 # socket and starts nothing of the system.
 #
-# Needs a built mwc with build/vinput and build/pngtool in MWC_DIR (by default ../mwc
-# or ../mwm), and grim. Output goes to build/ui.log, mrun's own to build/ui-mrun.log.
+# Needs a built mwc with build/vinput and build/pngtool in MWC_DIR (by default ../mwc),
+# and grim. Output goes to build/ui.log, mrun's own to build/ui-mrun.log.
 MRUN_DIR=$(cd "$(dirname "$0")/.." && pwd)
 MRUN=${MRUN:-$MRUN_DIR/mrun}
 LOG=$MRUN_DIR/build/ui.log
 MRUN_LOG=$MRUN_DIR/build/ui-mrun.log
-if [ -z "${MWC_DIR:-}" ]; then
-	MWC_DIR=$MRUN_DIR/../mwc
-	[ -d "$MWC_DIR" ] || MWC_DIR=$MRUN_DIR/../mwm
-fi
+MWC_DIR=${MWC_DIR:-$MRUN_DIR/../mwc}
 [ -x "$MRUN" ] || { echo "FAIL: $MRUN not built"; exit 1; }
 [ -d "$MWC_DIR" ] || { echo "FAIL: no mwc in $MWC_DIR (set MWC_DIR)"; exit 1; }
 cd "$MWC_DIR" || exit 1
@@ -363,6 +360,10 @@ type_text al
 pixel_is "sharp at scale 2: the row's first line" $((2 * (CX + 200))) $((2 * (CY + ROW0))) "$SEL"
 pixel_is "and its last" $((2 * (CX + 200))) $((2 * (CY + ROW0 + ROWH) - 1)) "$SEL"
 mrun_quit
+
+[ "$("$MRUN" -v)" = "mrun $(sed -n 's/^#define MRUN_VERSION "\(.*\)"/\1/p' "$MRUN_DIR/version.h")" ] ||
+	fail "-v: $("$MRUN" -v)"
+echo "ok: -v prints the version"
 
 trap cleanup EXIT
 stop_vinput

@@ -22,7 +22,7 @@ MRUN_LIBS = $(shell $(PKG_CONFIG) --libs $(PKGS)) -lm
 
 all: mrun
 
-mrun: mrun.c $(PROTO_H) $(PROTO_C)
+mrun: mrun.c version.h $(PROTO_H) $(PROTO_C)
 	$(CC) $(MRUN_CFLAGS) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ mrun.c $(PROTO_C) \
 		$(MRUN_LIBS) $(LDLIBS)
 
