@@ -287,6 +287,14 @@ echo "rows start at $ROW0, $ROWH high"
 do_input move $((CX + 100)) $((CY + ROW0 + ROWH + ROWH / 2))
 do_input click left
 pixel_is "a click chooses" $((CX + 200)) $((CY + ROW0 + ROWH + ROWH / 2)) "$SEL"
+# The chosen name on the active colour, a mid-tone: black reads better on it than white.
+black=$(build/pngtool count "$SMOKE_DIR/s.png" $((CX + 10)) $((CY + ROW0 + 1)) \
+	150 $((ROWH - 2)) 000000)
+white=$(build/pngtool count "$SMOKE_DIR/s.png" $((CX + 10)) $((CY + ROW0 + 1)) \
+	150 $((ROWH - 2)) ffffff)
+[ "$black" -gt 0 ] && [ "$white" = 0 ] ||
+	fail "the chosen name has $black black and $white white pixels"
+echo "ok: the chosen name is black"
 do_input key Return
 expect_ran "and Return runs that" alphabet ""
 
@@ -341,6 +349,20 @@ kill -0 "$OMEGA" 2>/dev/null || fail "what it started ended with it"
 kill "$OMEGA"
 rm "$MARKS/omega"
 echo "ok: it goes on by itself"
+
+# ---- a scaled output ------------------------------------------------------------
+
+# At scale 2 it draws twice the pixels: the first and last line of the chosen row are
+# its colour, not a blend with the list from a buffer scaled up.
+mkdir -p "$XDG_CONFIG_HOME/mwc"
+echo 'Mwm*HEADLESS-1*outputScale: 2' >>"$XDG_CONFIG_HOME/mwc/mwmrc"
+reload_mwc
+check "the output is scaled" "[ \"\$(global output_HEADLESS-1 scale)\" = 200 ]"
+mrun_start
+type_text al
+pixel_is "sharp at scale 2: the row's first line" $((2 * (CX + 200))) $((2 * (CY + ROW0))) "$SEL"
+pixel_is "and its last" $((2 * (CX + 200))) $((2 * (CY + ROW0 + ROWH) - 1)) "$SEL"
+mrun_quit
 
 trap cleanup EXIT
 stop_vinput

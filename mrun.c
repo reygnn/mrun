@@ -28,6 +28,7 @@
 #include <limits.h>
 #include <linux/input-event-codes.h>
 #include <locale.h>
+#include <math.h>
 #include <pango/pangocairo.h>
 #include <poll.h>
 #include <stdint.h>
@@ -97,6 +98,7 @@ static struct shmbuf *bufs[2];
 static struct xdg_surface *main_xdg;
 static struct xdg_toplevel *toplevel;
 static int configured;          /* the first configure has arrived */
+static int scale = 1;           /* buffer pixels per surface pixel */
 static int need_commit;         /* a configure waits for its commit */
 static int pend_w, pend_h;      /* size of the configure in progress */
 static int pend_bound;          /* ... which is maximized, tiled or the like */
@@ -108,7 +110,10 @@ static int ptr_x, ptr_y;
 static double axis_acc;
 static int axis_steps;
 static struct wl_surface *cursor_surf;
+static struct wl_cursor_theme *cursor_theme;
 static struct wl_cursor_image *cursor_img;
+static int cursor_scale;
+static void cursor_load(void);
 
 static struct wl_keyboard *keyboard;
 static struct xkb_context *xkb;
@@ -438,10 +443,21 @@ static uint32_t mix(uint32_t rgb, uint32_t to, float f)
 	return out;
 }
 
+/* An sRGB channel as linear light. */
+static float linear(unsigned c)
+{
+	float v = c / 255.0f;
+	return v <= 0.04045f ? v / 12.92f : powf((v + 0.055f) / 1.055f, 2.4f);
+}
+
+/* Black or white, whichever has the higher WCAG contrast on bg. The two are equal
+ * at a relative luminance of sqrt(1.05 * 0.05) - 0.05, a grey of about 0x76: a
+ * mid-tone such as mwc's activeBackground gets black. */
 static uint32_t contrast(uint32_t bg)
 {
-	unsigned r = (bg >> 16) & 0xff, g = (bg >> 8) & 0xff, b = bg & 0xff;
-	return 299 * r + 587 * g + 114 * b > 140000 ? 0x000000 : 0xffffff;
+	float l = 0.2126f * linear((bg >> 16) & 0xff) + 0.7152f * linear((bg >> 8) & 0xff) +
+		0.0722f * linear(bg & 0xff);
+	return (l + 0.05f) * (l + 0.05f) > 1.05f * 0.05f ? 0x000000 : 0xffffff;
 }
 
 /* What mwc reads: "#rrggbb", names like "gold", and rgb:r/g/b with 1 to 4 hex
@@ -682,16 +698,19 @@ static void paint(void)
 /* 0 if the compositor holds both buffers: try again after a release. */
 static int draw(void)
 {
-	struct shmbuf *b = get_buffer(W, H);
+	struct shmbuf *b = get_buffer(W * scale, H * scale);
 	if (!b)
 		return 0;
 	cr = b->cr;
+	cairo_identity_matrix(cr);
+	cairo_scale(cr, scale, scale);
 	paint();
 	cairo_surface_flush(b->cs);
 	if (frame)
 		wl_callback_destroy(frame);
 	frame = wl_surface_frame(surface);
 	wl_callback_add_listener(frame, &frame_listener, NULL);
+	wl_surface_set_buffer_scale(surface, scale);
 	wl_surface_attach(surface, b->wl, 0, 0);
 	wl_surface_damage_buffer(surface, 0, 0, b->w, b->h);
 	wl_surface_commit(surface);
@@ -954,9 +973,11 @@ static void ptr_enter(void *data, struct wl_pointer *p, uint32_t serial,
 	ptr_surface = s;
 	ptr_x = wl_fixed_to_int(x);
 	ptr_y = wl_fixed_to_int(y);
+	cursor_load();
 	if (cursor_img) {
-		wl_pointer_set_cursor(p, serial, cursor_surf, cursor_img->hotspot_x,
-			cursor_img->hotspot_y);
+		wl_pointer_set_cursor(p, serial, cursor_surf,
+			cursor_img->hotspot_x / cursor_scale, cursor_img->hotspot_y / cursor_scale);
+		wl_surface_set_buffer_scale(cursor_surf, cursor_scale);
 		wl_surface_attach(cursor_surf,
 			wl_cursor_image_get_buffer(cursor_img), 0, 0);
 		wl_surface_damage_buffer(cursor_surf, 0, 0, cursor_img->width,
@@ -1114,7 +1135,7 @@ static void registry_global(void *data, struct wl_registry *r, uint32_t name,
 {
 	if (!strcmp(iface, wl_compositor_interface.name)) {
 		compositor = wl_registry_bind(r, name, &wl_compositor_interface,
-			MIN(ver, 4));
+			MIN(ver, 6));
 	} else if (!strcmp(iface, wl_shm_interface.name)) {
 		shm = wl_registry_bind(r, name, &wl_shm_interface, 1);
 	} else if (!strcmp(iface, wl_seat_interface.name) && !seat) {
@@ -1184,22 +1205,59 @@ static const struct xdg_toplevel_listener toplevel_listener = {
 	.close = top_close,
 };
 
-static void cursor_init(void)
+/* The theme's cursor at the window's scale, loaded again when that changes. */
+static void cursor_load(void)
 {
+	if (cursor_scale == scale)
+		return;
+	if (cursor_theme)
+		wl_cursor_theme_destroy(cursor_theme);
+	cursor_theme = NULL;
+	cursor_img = NULL;
+	cursor_scale = scale;
 	const char *s = getenv("XCURSOR_SIZE");
 	int size = s && atoi(s) > 0 ? atoi(s) : 24;
-	struct wl_cursor_theme *theme =
-		wl_cursor_theme_load(getenv("XCURSOR_THEME"), size, shm);
-	if (!theme)
+	cursor_theme = wl_cursor_theme_load(getenv("XCURSOR_THEME"), size * scale, shm);
+	if (!cursor_theme)
 		return;
-	struct wl_cursor *c = wl_cursor_theme_get_cursor(theme, "default");
+	struct wl_cursor *c = wl_cursor_theme_get_cursor(cursor_theme, "default");
 	if (!c)
-		c = wl_cursor_theme_get_cursor(theme, "left_ptr");
-	if (!c)
-		return;
-	cursor_img = c->images[0];
-	cursor_surf = wl_compositor_create_surface(compositor);
+		c = wl_cursor_theme_get_cursor(cursor_theme, "left_ptr");
+	if (c)
+		cursor_img = c->images[0];
+	if (!cursor_surf)
+		cursor_surf = wl_compositor_create_surface(compositor);
 }
+
+/* Sharp on a scaled output: wl_compositor 6 says which scale the output it is on
+ * has. An older compositor never does, and it stays at 1. */
+static void surf_enter(void *data, struct wl_surface *s, struct wl_output *o)
+{
+}
+
+static void surf_leave(void *data, struct wl_surface *s, struct wl_output *o)
+{
+}
+
+static void surf_preferred_scale(void *data, struct wl_surface *s, int32_t factor)
+{
+	if (factor < 1 || factor == scale)
+		return;
+	scale = factor;
+	dirty = 1;
+}
+
+static void surf_preferred_transform(void *data, struct wl_surface *s,
+	uint32_t transform)
+{
+}
+
+static const struct wl_surface_listener surf_listener = {
+	.enter = surf_enter,
+	.leave = surf_leave,
+	.preferred_buffer_scale = surf_preferred_scale,
+	.preferred_buffer_transform = surf_preferred_transform,
+};
 
 /* The locale compose sequences follow, in the order of xkbcommon's docs. */
 static void compose_init(void)
@@ -1222,6 +1280,7 @@ static void compose_init(void)
 static void setup_window(void)
 {
 	surface = wl_compositor_create_surface(compositor);
+	wl_surface_add_listener(surface, &surf_listener, NULL);
 	main_xdg = xdg_wm_base_get_xdg_surface(wm_base, surface);
 	xdg_surface_add_listener(main_xdg, &main_xdg_listener, NULL);
 	toplevel = xdg_surface_get_toplevel(main_xdg);
@@ -1275,7 +1334,7 @@ int main(int argc, char **argv)
 			"or xdg_wm_base\n");
 		return 1;
 	}
-	cursor_init();
+	cursor_load();
 	theme_init();
 	scan_path();
 	update_matches();
