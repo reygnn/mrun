@@ -11,7 +11,8 @@ the command really started, mrun can't see.
 The list is read once at the start; a program installed while mrun is open is not in
 it.
 
-Entries in `$PATH` that are not absolute don't count.
+Entries in `$PATH` that are not absolute don't count, except for the shell, which gets
+`$PATH` as it is.
 
 Names that are not valid UTF-8 or contain control characters are not listed. With a
 path and a blank they can still be started through the shell.

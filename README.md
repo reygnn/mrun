@@ -24,7 +24,8 @@ On Ubuntu 26.04:
 
 At the start mrun reads the programs in `$PATH`, and typing narrows the list: the exact
 name first, then names starting with the text, then names containing it, ignoring case.
-It quits once it has started a program.
+It quits once it has started a program; one that can't be started leaves it open, with
+the reason in the status line.
 
 Return runs one of two things. A line without a blank runs the chosen program directly,
 without a shell, so `fire` starts Firefox if that is the first match. Without a match

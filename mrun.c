@@ -38,6 +38,7 @@
 #include <strings.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include <wayland-client.h>
@@ -61,9 +62,15 @@ struct rect { int x, y, w, h; };
 
 /* ---- state -------------------------------------------------------------- */
 
-static char **names;            /* of the programs, sorted, no duplicates */
+struct prog {
+	char *path;             /* as found in $PATH, what is started */
+	const char *name;       /* in path */
+	int order;              /* of finding it: the first in $PATH wins */
+};
+
+static struct prog *progs;      /* sorted by name, no duplicates */
 static int nnames;
-static int *matches;            /* indexes into names, best first */
+static int *matches;            /* indexes into progs, best first */
 static int nmatches;
 static int sel = -1, top;       /* chosen and first shown of the matches */
 static char line[4096];
@@ -146,9 +153,14 @@ static uint64_t now_ms(void)
 
 /* ---- the programs in $PATH ---------------------------------------------- */
 
-static int name_cmp(const void *a, const void *b)
+/* Case only as a tie break, so the same name lands next to itself. */
+static int prog_cmp(const void *a, const void *b)
 {
-	return strcasecmp(*(char *const *)a, *(char *const *)b);
+	const struct prog *p = a, *q = b;
+	int c = strcasecmp(p->name, q->name);
+	if (!c)
+		c = strcmp(p->name, q->name);
+	return c ? c : p->order - q->order;
 }
 
 /* What can't be typed or drawn isn't offered: not valid UTF-8, or control characters. */
@@ -191,30 +203,35 @@ static void scan_path(void)
 				continue;
 			if (nnames == cap) {
 				cap = cap ? cap * 2 : 1024;
-				char **grown = realloc(names, cap * sizeof *names);
+				struct prog *grown = realloc(progs, cap * sizeof *progs);
 				if (!grown) {
 					fprintf(stderr, "mrun: out of memory\n");
 					exit(1);
 				}
-				names = grown;
+				progs = grown;
 			}
-			if (!(names[nnames] = strdup(e->d_name))) {
+			struct prog *pr = &progs[nnames];
+			size_t dl = strlen(dir);
+			if (!(pr->path = malloc(dl + strlen(e->d_name) + 2))) {
 				fprintf(stderr, "mrun: out of memory\n");
 				exit(1);
 			}
-			nnames++;
+			sprintf(pr->path, "%s/%s", dir, e->d_name);
+			pr->name = pr->path + dl + 1;
+			pr->order = nnames++;
 		}
 		closedir(d);
 	}
 	free(copy);
-	qsort(names, nnames, sizeof *names, name_cmp);
-	/* The same name twice: the shell would only ever find one of them. */
+	if (nnames)
+		qsort(progs, nnames, sizeof *progs, prog_cmp);
+	/* The same name twice: the shell would only ever find the first. */
 	int kept = 0;
 	for (int i = 0; i < nnames; i++) {
-		if (kept && !strcmp(names[kept - 1], names[i]))
-			free(names[i]);
+		if (kept && !strcmp(progs[kept - 1].name, progs[i].name))
+			free(progs[i].path);
 		else
-			names[kept++] = names[i];
+			progs[kept++] = progs[i];
 	}
 	nnames = kept;
 	if (!(matches = malloc((size_t)(nnames + 1) * sizeof *matches))) {
@@ -260,7 +277,7 @@ static void update_matches(void)
 	nmatches = 0;
 	for (int rank = 0; rank < 3; rank++) {
 		for (int i = 0; i < nnames; i++) {
-			const char *n = names[i];
+			const char *n = progs[i].name;
 			int is_prefix = !strncasecmp(n, q, qlen);
 			int is_exact = is_prefix && !n[qlen];
 			if (rank == 0 ? is_exact :
@@ -278,17 +295,32 @@ static void update_matches(void)
 
 /* ---- running ------------------------------------------------------------ */
 
-/* Starts it in a session of its own and ends here, unless it can't be started. */
+static void cannot_start(int err)
+{
+	snprintf(status_msg, sizeof status_msg, "cannot start: %s", strerror(err));
+	dirty = 1;
+}
+
+/*
+ * Starts it in a session of its own and ends here, unless it can't be started. A failed
+ * exec comes back through the pipe, which closes by itself when the exec succeeds.
+ */
 static void run_argv(const char *file, char *const argv[])
 {
+	int fds[2];
+	if (pipe2(fds, O_CLOEXEC) != 0) {
+		cannot_start(errno);
+		return;
+	}
 	pid_t pid = fork();
 	if (pid < 0) {
-		snprintf(status_msg, sizeof status_msg, "cannot start: %s",
-			strerror(errno));
-		dirty = 1;
+		cannot_start(errno);
+		close(fds[0]);
+		close(fds[1]);
 		return;
 	}
 	if (pid == 0) {
+		close(fds[0]);
 		setsid();
 		int null = open("/dev/null", O_RDONLY);
 		if (null >= 0) {
@@ -297,16 +329,30 @@ static void run_argv(const char *file, char *const argv[])
 				close(null);
 		}
 		execvp(file, argv);
-		fprintf(stderr, "mrun: %s: %s\n", file, strerror(errno));
+		int err = errno;
+		fprintf(stderr, "mrun: %s: %s\n", file, strerror(err));
+		while (write(fds[1], &err, sizeof err) < 0 && errno == EINTR)
+			;
 		_exit(127);
 	}
-	exit(0);
+	close(fds[1]);
+	int err;
+	ssize_t n;
+	while ((n = read(fds[0], &err, sizeof err)) < 0 && errno == EINTR)
+		;
+	close(fds[0]);
+	if (n != sizeof err)
+		exit(0);
+	while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
+		;
+	cannot_start(err);
 }
 
-static void run_name(const char *name)
+/* By the path it was found at: execvp would also search what scan_path skips. */
+static void run_prog(const struct prog *p)
 {
-	char *const argv[] = { (char *)name, NULL };
-	run_argv(name, argv);
+	char *const argv[] = { (char *)p->name, NULL };
+	run_argv(p->path, argv);
 }
 
 static void run_line(void)
@@ -323,7 +369,7 @@ static void activate(void)
 	if (has_args()) {
 		run_line();
 	} else if (sel >= 0) {
-		run_name(names[matches[sel]]);
+		run_prog(&progs[matches[sel]]);
 	} else if (strchr(line, '/')) {
 		run_line();
 	} else {
@@ -337,7 +383,7 @@ static void take_chosen(void)
 {
 	if (sel < 0)
 		return;
-	const char *n = names[matches[sel]];
+	const char *n = progs[matches[sel]].name;
 	size_t old = first_word(), nl = strlen(n), rest = strlen(line) - old;
 	int blank = !rest;
 	if (nl + rest + 2 > sizeof line)
@@ -680,7 +726,7 @@ static void paint(void)
 		if (i == sel)
 			fill(px_sel, lx + 1, y, lw - 2, rowh);
 		text(i == sel ? xc_sel : xc_fg, lx + 5, y, rowh, lw - 10,
-			names[matches[i]]);
+			progs[matches[i]].name);
 	}
 	cairo_restore(cr);
 
@@ -1026,7 +1072,7 @@ static void ptr_button(void *data, struct wl_pointer *p, uint32_t serial,
 		take_chosen();
 		run_line();
 	} else {
-		run_name(names[matches[sel]]);
+		run_prog(&progs[matches[sel]]);
 	}
 }
 

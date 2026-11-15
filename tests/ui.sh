@@ -49,10 +49,12 @@ mkdir "$A/epsilon"
 ln -s alpha "$A/zeta"           # a link counts
 printf '#!/bin/sh\necho $$ >"%s/omega"\nexec /bin/sleep 60\n' "$MARKS" >"$A/omega"
 chmod +x "$A/omega"
+program "$A" gone
 PROGS=$A:$Z
 
-mrun_start() { # [PATH]
-	PATH=${1:-$PROGS} WAYLAND_DISPLAY=wayland-0 "$MRUN" >>"$MRUN_LOG" 2>&1 &
+mrun_start() { # [PATH [directory]]
+	(cd "${2:-.}" && PATH=${1:-$PROGS} WAYLAND_DISPLAY=wayland-0 exec "$MRUN") \
+		>>"$MRUN_LOG" 2>&1 &
 	MRUN_PID=$!
 	check "mrun has a focused window" '[ "$(get mrun kbfocus)" = 1 ]'
 	CX=$(($(get mrun x) + B))
@@ -191,16 +193,17 @@ expect_ran "but Down chooses the first of all" alpha ""
 # A relative PATH entry means the directory it happens to be started in.
 mkdir "$SMOKE_DIR/cwd"
 program "$SMOKE_DIR/cwd" rel
-(
-	cd "$SMOKE_DIR/cwd" || exit 1
-	exec env PATH=.:"$A" WAYLAND_DISPLAY=wayland-0 "$MRUN" >>"$MRUN_LOG" 2>&1
-) &
-MRUN_PID=$!
-check "mrun has a focused window" '[ "$(get mrun kbfocus)" = 1 ]'
+program "$SMOKE_DIR/cwd" alpha dotalpha
+mrun_start ".:$A" "$SMOKE_DIR/cwd"
 type_text rel
 do_input key Return
 still_open "a relative PATH entry doesn't count"
 mrun_quit
+# Nor when starting: alpha is the one in the list.
+mrun_start ".:$A" "$SMOKE_DIR/cwd"
+type_text alpha
+do_input key Return
+expect_ran "a name runs from where it was found, not from ./" alpha ""
 
 mrun_start "$SMOKE_DIR/nonexistent"
 type_text alpha
@@ -317,6 +320,16 @@ still_open "a double click below the rows does nothing"
 do_input wheel 1
 do_input wheel -1
 still_open "the wheel only scrolls"
+mrun_quit
+
+# ---- starting ------------------------------------------------------------------
+
+# Removed after mrun read the list: the exec fails, and mrun stays to say so.
+mrun_start
+rm "$A/gone"
+type_text gone
+do_input key Return
+still_open "a program that can't start leaves it open"
 mrun_quit
 
 # ---- ending --------------------------------------------------------------------
