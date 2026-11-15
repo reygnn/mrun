@@ -268,6 +268,19 @@ type_text alpha
 do_input key Return
 expect_ran "Ctrl+U clears" alpha ""
 
+# A compose sequence of its own, from plain keys: q then a is "alpha".
+printf '<q> <a> : "alpha"\n' >"$SMOKE_DIR/Compose"
+XCOMPOSEFILE=$SMOKE_DIR/Compose mrun_start
+do_input key q
+do_input key a
+do_input key Return
+expect_ran "a compose sequence" alpha ""
+XCOMPOSEFILE=$SMOKE_DIR/Compose mrun_start
+do_input key q
+do_input key Escape
+mrun_exits "Esc in the middle of a compose sequence"
+echo "ok: Esc in the middle of a compose sequence still ends it"
+
 # ---- the mouse -----------------------------------------------------------------
 
 mrun_start

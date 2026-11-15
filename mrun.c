@@ -920,9 +920,15 @@ static void key_press(uint32_t kc)
 		switch (xkb_compose_state_get_status(compose)) {
 		case XKB_COMPOSE_COMPOSING:
 			return;
-		case XKB_COMPOSE_CANCELLED:
+		case XKB_COMPOSE_CANCELLED: {
 			xkb_compose_state_reset(compose);
-			return;
+			/* A character that doesn't fit is dropped, as elsewhere; Esc,
+			 * Return or an arrow still does what it does. */
+			uint32_t c = xkb_keysym_to_utf32(ks);
+			if (c >= 0x20 && c != 0x7f)
+				return;
+			break;
+		}
 		case XKB_COMPOSE_COMPOSED:
 			n = xkb_compose_state_get_utf8(compose, txt, sizeof txt);
 			ks = xkb_compose_state_get_one_sym(compose);
