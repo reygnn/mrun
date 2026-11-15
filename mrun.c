@@ -7,7 +7,7 @@
  * exact names first, then those starting with the text, then those containing it,
  * ignoring case. It reads the same colours as mwc: MWC_INACTIVE / MWC_ACTIVE from
  * the environment, else Mwm*background and Mwm*activeBackground from
- * ~/.config/mwc/mwmrc, else the Motif defaults.
+ * ~/.config/mwc/mwmrc, else the Motif defaults; the text in Mwm*foreground.
  *
  * Keys:   typing  narrows the list      Up/Down/PgUp/PgDn  choose
  *         Return  run                   Tab  take the chosen name
@@ -598,7 +598,13 @@ static uint32_t setting(const char *env, const char *res, uint32_t def)
 static void theme_init(void)
 {
 	uint32_t bg = setting("MWC_INACTIVE", "background", 0xaeb2c3);
-	uint32_t fg = contrast(bg);
+	/* As in mwc: the text is Mwm*foreground where set, on the chosen row too, else
+	 * black or white by contrast. activeForeground is only for titles. */
+	char v[256];
+	uint32_t fg;
+	int has_fg = parse_color(mwmrc_get("foreground", v, sizeof v), &fg);
+	if (!has_fg)
+		fg = contrast(bg);
 
 	px_bg = bg;
 	px_top = mix(bg, 0xffffff, 0.55f);
@@ -606,10 +612,11 @@ static void theme_init(void)
 	px_list = mix(bg, 0xffffff, 0.3f);
 	px_paper = 0xf6f6f6;
 	px_sel = setting("MWC_ACTIVE", "activeBackground", 0x7387ad);
-	xc_fg = contrast(px_list);
-	xc_sel = contrast(px_sel);
+	xc_fg = has_fg ? fg : contrast(px_list);
+	xc_sel = has_fg ? fg : contrast(px_sel);
 	xc_dim = mix(bg, fg, 0.6f);
-	xc_err = fg == 0xffffff ? 0xffa0a0 : 0x8a0303; /* readable on dark themes */
+	/* Light text means a dark theme, where dark red wouldn't read. */
+	xc_err = contrast(fg) == 0x000000 ? 0xffa0a0 : 0x8a0303;
 
 	const char *f = getenv("MRUN_FONT");
 	PangoFontDescription *desc =

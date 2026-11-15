@@ -64,7 +64,8 @@ Programs run in a session of their own, without a terminal: a terminal program s
 
 The colours are mwc's: `MWC_INACTIVE` and `MWC_ACTIVE` from the environment, else
 `Mwm*background` and `Mwm*activeBackground` from `~/.config/mwc/mwmrc`, else the Motif
-defaults.
+defaults. The text is `Mwm*foreground` where it is set, else black or white, whichever
+reads better.
 
 
 ## Testing

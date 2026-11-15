@@ -360,6 +360,25 @@ kill "$OMEGA"
 rm "$MARKS/omega"
 echo "ok: it goes on by itself"
 
+# ---- mwmrc -----------------------------------------------------------------------
+
+# Mwm*foreground is the text, as in mwc: on the chosen row and the others alike.
+mkdir -p "$XDG_CONFIG_HOME/mwc"
+echo 'Mwm*foreground: #c00000' >"$XDG_CONFIG_HOME/mwc/mwmrc"
+mrun_start
+type_text al
+pixel_is "the chosen row with a foreground set" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) "$SEL"
+for row in 0 1; do
+	ry=$((CY + ROW0 + row * ROWH + 1))
+	red=$(build/pngtool count "$SMOKE_DIR/shot.png" $((CX + 10)) "$ry" 150 $((ROWH - 2)) c00000)
+	black=$(build/pngtool count "$SMOKE_DIR/shot.png" $((CX + 10)) "$ry" 150 $((ROWH - 2)) 000000)
+	[ "$red" -gt 0 ] && [ "$black" = 0 ] ||
+		fail "Mwm*foreground: row $row has $red red and $black black pixels"
+done
+echo "ok: Mwm*foreground is the text"
+mrun_quit
+rm "$XDG_CONFIG_HOME/mwc/mwmrc"
+
 # ---- a scaled output ------------------------------------------------------------
 
 # At scale 2 it draws twice the pixels: the first and last line of the chosen row are
