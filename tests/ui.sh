@@ -547,6 +547,36 @@ for start in a ab; do
 done
 echo "ok: a long status is cut on a character"
 
+# A held key repeats, and stops when the compositor turns repeating off.
+mkdir -p "$XDG_CONFIG_HOME/mwc"
+XCOMPOSEFILE=$SMOKE_DIR/Compose mrun_start
+type_text qxqxqxqx
+mrun_sync || fail "a long line: mrun ended"
+len() { local l; l=$(mstate line); echo "${#l}"; }
+[ "$(len)" = 252 ] || fail "a long line has $(len) bytes"
+do_input press BackSpace
+wait_for "a held Backspace repeats" eval '[ "$(len)" -lt 240 ]'
+echo 'Mwm*keyboardRepeatRate: 0' >"$XDG_CONFIG_HOME/mwc/mwmrc"
+reload_mwc
+# Settled once it hasn't changed for a fifth of a second (25 a second before), then
+# it must stay so for longer than a repeat once a second would take.
+for ((i = 0, n = -1; i < 50; i++)); do
+	m=$(len)
+	[ "$m" = "$n" ] && break
+	n=$m
+	sleep 0.2
+done
+for ((i = 0; i < 15; i++)); do
+	[ "$(len)" = "$n" ] || fail "repeating is off, and Backspace still took $((n - $(len)))"
+	sleep 0.1
+done
+do_input lift BackSpace
+[ "$n" -gt 0 ] || fail "the line was empty before repeating was turned off"
+echo "ok: rate 0 stops a key that is repeating"
+mrun_quit
+rm "$XDG_CONFIG_HOME/mwc/mwmrc"
+reload_mwc
+
 # ---- the mouse -----------------------------------------------------------------
 
 mrun_start
