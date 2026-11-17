@@ -32,11 +32,12 @@ Return runs one of two things. A line without a blank runs the chosen program di
 without a shell, so `fire` starts Firefox if that is the first match. Without a match
 the status line says so, unless the line has a `/`; then it goes to the shell. A line
 with a blank goes to `/bin/sh -c` as it is, so arguments and shell syntax work, such
-as `firefox --private-window` or `sleep 5; foot`. On an empty line Return does nothing
-until a program is chosen.
+as `firefox --private-window` or `sleep 5; foot`. On a line that is empty or only
+blanks Return does nothing until a program is chosen.
 
 Tab and a double click with arguments put the name in single quotes if the shell would
-read it otherwise, such as a name with a blank.
+read it otherwise, such as a name with a blank or `=`, or a word like `if`. Typing the
+arguments keeps the program that is chosen.
 
 Programs run in a session of their own, without a terminal: a terminal program such as
 `htop` is started as `foot htop`.

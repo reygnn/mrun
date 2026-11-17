@@ -31,6 +31,7 @@
 #include <math.h>
 #include <pango/pangocairo.h>
 #include <poll.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,7 +81,9 @@ static uint32_t last_click_ms;
 static int last_click_row = -1;
 static int dirty = 1;
 static const char *test_state;  /* MRUN_TEST_STATE: where the tests read it */
-static unsigned keys_seen;      /* presses handled, to wait for in the tests */
+/* For the tests: F6 presses, to wait for all input before one; directories read;
+ * frames drawn; cursor themes loaded. */
+static unsigned syncs, dirs_read, draws, cursor_loads;
 
 /* ---- Wayland ------------------------------------------------------------ */
 
@@ -179,6 +182,10 @@ static void scan_path(void)
 {
 	const char *path = getenv("PATH");
 	int cap = 0;
+	/* The directories read: a merged /usr or a profile that adds an entry again
+	 * names one twice, and its programs would only be found twice. */
+	struct { dev_t dev; ino_t ino; } seen[64];      /* past that only slower */
+	int nseen = 0;
 	char *copy = strdup(path ? path : "");
 	if (!copy) {
 		fprintf(stderr, "mrun: out of memory\n");
@@ -196,6 +203,21 @@ static void scan_path(void)
 				close(fd);
 			continue;
 		}
+		struct stat ds;
+		int again = 0;
+		if (fstat(fd, &ds) == 0) {
+			for (int i = 0; i < nseen && !again; i++)
+				again = seen[i].dev == ds.st_dev && seen[i].ino == ds.st_ino;
+			if (!again && nseen < (int)(sizeof seen / sizeof *seen)) {
+				seen[nseen].dev = ds.st_dev;
+				seen[nseen++].ino = ds.st_ino;
+			}
+		}
+		if (again) {
+			closedir(d);
+			continue;
+		}
+		dirs_read++;
 		struct dirent *e;
 		while ((e = readdir(d))) {
 			struct stat st;
@@ -249,9 +271,28 @@ static size_t first_word(void)
 	return strcspn(line, " \t");
 }
 
+static int only_blanks(void)
+{
+	return !line[strspn(line, " \t")];
+}
+
+/* Blanks alone are as good as nothing typed. */
 static int has_args(void)
 {
-	return line[first_word()] != 0;
+	return line[first_word()] != 0 && !only_blanks();
+}
+
+/* The status line, cut on a character: Pango wants valid UTF-8. */
+static void __attribute__((format(printf, 1, 2))) set_status(const char *fmt, ...)
+{
+	va_list ap;
+	const char *end;
+	va_start(ap, fmt);
+	vsnprintf(status_msg, sizeof status_msg, fmt, ap);
+	va_end(ap);
+	g_utf8_validate(status_msg, -1, &end);
+	status_msg[end - status_msg] = 0;
+	dirty = 1;
 }
 
 static int rows_vis(void)
@@ -273,10 +314,17 @@ static void show_sel(void)
 /* Best first, and otherwise in the order of the names. */
 static void update_matches(void)
 {
+	static char q[sizeof line];
+	static int have_q;
 	size_t qlen = first_word();
-	char q[sizeof line];
+	status_msg[0] = 0;
+	dirty = 1;
+	/* Typing the arguments keeps the list, and what is chosen in it. */
+	if (have_q && !strncmp(q, line, qlen) && !q[qlen])
+		return;
 	memcpy(q, line, qlen);
 	q[qlen] = 0;
+	have_q = 1;
 	nmatches = 0;
 	/* The exact name as typed goes before the same in another case. */
 	for (int rank = 0; rank < 4; rank++) {
@@ -295,16 +343,13 @@ static void update_matches(void)
 	/* With nothing typed nothing is chosen, so Return doesn't run the first of all. */
 	sel = qlen && nmatches ? 0 : -1;
 	top = 0;
-	status_msg[0] = 0;
-	dirty = 1;
 }
 
 /* ---- running ------------------------------------------------------------ */
 
 static void cannot_start(int err)
 {
-	snprintf(status_msg, sizeof status_msg, "cannot start: %s", strerror(err));
-	dirty = 1;
+	set_status("cannot start: %s", strerror(err));
 }
 
 /*
@@ -363,33 +408,45 @@ static void run_prog(const struct prog *p)
 
 static void run_line(void)
 {
-	char *const argv[] = { (char *)"sh", (char *)"-c", line, NULL };
+	/* After "--" a line starting with "-" is a command, not options. */
+	char *const argv[] = { (char *)"sh", (char *)"-c", (char *)"--", line, NULL };
 	run_argv("/bin/sh", argv);
 }
 
 /* Return. With a blank the line is what the user wants, whatever is chosen. */
 static void activate(void)
 {
-	if (!line[0] && sel < 0)
-		return;
-	if (has_args()) {
+	if (has_args())
 		run_line();
-	} else if (sel >= 0) {
+	else if (sel >= 0)
 		run_prog(&progs[matches[sel]]);
-	} else if (strchr(line, '/')) {
+	else if (only_blanks())
+		return;
+	else if (strchr(line, '/'))
 		run_line();
-	} else {
-		snprintf(status_msg, sizeof status_msg, "not in $PATH: %.200s", line);
-		dirty = 1;
-	}
+	else
+		set_status("not in $PATH: %s", line);
+}
+
+/* A word the shell takes for syntax at the start of a command. */
+static int reserved(const char *n)
+{
+	static const char *const words[] = { "case", "do", "done", "elif", "else",
+		"esac", "fi", "for", "function", "if", "in", "select", "then", "time",
+		"until", "while" };
+	for (size_t i = 0; i < sizeof words / sizeof *words; i++)
+		if (!strcmp(n, words[i]))
+			return 1;
+	return 0;
 }
 
 /* The name as the shell reads it: in single quotes if it has anything but
- * letters, digits and a few harmless characters. */
+ * letters, digits and a few harmless characters, or is a reserved word. No "=":
+ * a name with it would be an assignment. */
 static size_t shell_word(const char *n, char *out, size_t size)
 {
 	if (!n[strspn(n, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	    "0123456789_+-.,:@%=/")])
+	    "0123456789_+-.,:@%/")] && !reserved(n))
 		return (size_t)snprintf(out, size, "%s", n);
 	size_t o = 0;
 	out[o++] = '\'';
@@ -408,19 +465,20 @@ static size_t shell_word(const char *n, char *out, size_t size)
 	return o;
 }
 
-/* Puts the chosen name in place of the first word; what follows stays. */
-static void take_chosen(void)
+/* Puts the chosen name in place of the first word; what follows stays, or a blank
+ * after it if nothing does. 0 if it doesn't fit, and the line is as it was. */
+static int take_chosen(void)
 {
 	if (sel < 0)
-		return;
+		return 0;
 	char n[sizeof line];
 	size_t nl = shell_word(progs[matches[sel]].name, n, sizeof n);
-	if (nl >= sizeof n)
-		return;
 	size_t old = first_word(), rest = strlen(line) - old;
 	int blank = !rest;
-	if (nl + rest + 2 > sizeof line)
-		return;
+	if (nl >= sizeof n || nl + rest + blank + 1 > sizeof line) {
+		set_status("the line has no room for the name");
+		return 0;
+	}
 	memmove(line + nl, line + old, rest + 1);
 	memcpy(line, n, nl);
 	if (blank) {
@@ -429,6 +487,7 @@ static void take_chosen(void)
 	}
 	cur = nl + 1;
 	update_matches();
+	return 1;
 }
 
 /* ---- buffers ------------------------------------------------------------ */
@@ -829,6 +888,7 @@ static int draw(void)
 	wl_surface_damage_buffer(surface, 0, 0, b->w, b->h);
 	wl_surface_commit(surface);
 	b->busy = 1;
+	draws++;
 	return 1;
 }
 
@@ -867,9 +927,17 @@ static void move_sel(int d)
 {
 	if (!nmatches)
 		return;
+	int was_sel = sel, was_top = top;
 	sel = MAX(MIN(sel < 0 ? (d > 0 ? 0 : nmatches - 1) : sel + d, nmatches - 1), 0);
 	show_sel();
-	dirty = 1;
+	dirty |= sel != was_sel || top != was_top;
+}
+
+/* A held key at the end of the line would repaint for nothing. */
+static void move_cur(size_t to)
+{
+	dirty |= to != cur;
+	cur = to;
 }
 
 static void key(xkb_keysym_t ks, const char *txt, int n)
@@ -891,6 +959,9 @@ static void key(xkb_keysym_t ks, const char *txt, int n)
 	switch (ks) {
 	case XKB_KEY_Escape:
 		exit(0);
+	case XKB_KEY_F6:        /* nothing, but the tests wait for it */
+		syncs++;
+		return;
 	case XKB_KEY_Return: case XKB_KEY_KP_Enter:
 		activate();
 		return;
@@ -910,20 +981,16 @@ static void key(xkb_keysym_t ks, const char *txt, int n)
 		move_sel(rows_vis());
 		return;
 	case XKB_KEY_Left: case XKB_KEY_KP_Left:
-		cur = prev_char(cur);
-		dirty = 1;
+		move_cur(prev_char(cur));
 		return;
 	case XKB_KEY_Right: case XKB_KEY_KP_Right:
-		cur = next_char(cur);
-		dirty = 1;
+		move_cur(next_char(cur));
 		return;
 	case XKB_KEY_Home: case XKB_KEY_KP_Home:
-		cur = 0;
-		dirty = 1;
+		move_cur(0);
 		return;
 	case XKB_KEY_End: case XKB_KEY_KP_End:
-		cur = strlen(line);
-		dirty = 1;
+		move_cur(strlen(line));
 		return;
 	case XKB_KEY_BackSpace:
 		if (cur)
@@ -1053,7 +1120,6 @@ static void kb_key(void *data, struct wl_keyboard *k, uint32_t serial,
 			repeat_kc = 0;
 		return;
 	}
-	keys_seen++;
 	/* A modifier does not stop a key that is repeating. */
 	int repeats = xkb_keymap_key_repeats(kb_map, kc);
 	if (repeats)
@@ -1078,6 +1144,9 @@ static void kb_repeat_info(void *data, struct wl_keyboard *k, int32_t rate,
 {
 	repeat_rate = rate;
 	repeat_delay = delay;
+	/* 0 turns it off, also for a key that is repeating now. */
+	if (rate <= 0)
+		repeat_kc = 0;
 }
 
 static const struct wl_keyboard_listener keyboard_listener = {
@@ -1141,8 +1210,8 @@ static void ptr_button(void *data, struct wl_pointer *p, uint32_t serial,
 	if (!twice)
 		return;
 	if (has_args()) {
-		take_chosen();
-		run_line();
+		if (take_chosen())
+			run_line();
 	} else {
 		run_prog(&progs[matches[sel]]);
 	}
@@ -1192,8 +1261,9 @@ static void ptr_frame(void *data, struct wl_pointer *p)
 	axis_steps = 0;
 	if (!steps)
 		return;
+	int was_top = top;
 	top = MAX(MIN(top + steps * ROWS_PER_STEP, nmatches - rows_vis()), 0);
-	dirty = 1;
+	dirty |= top != was_top;
 }
 
 static const struct wl_pointer_listener pointer_listener = {
@@ -1290,6 +1360,7 @@ static void main_xdg_configure(void *data, struct xdg_surface *s,
 	uint32_t serial)
 {
 	xdg_surface_ack_configure(s, serial);
+	int was_w = W, was_h = H;
 	W = pend_w > 0 ? pend_w : float_w;
 	H = pend_h > 0 ? pend_h : float_h;
 	if (!pend_bound) {
@@ -1297,7 +1368,11 @@ static void main_xdg_configure(void *data, struct xdg_surface *s,
 		float_h = H;
 	}
 	layout();
-	show_sel();
+	/* A new size shows what is chosen; focus alone keeps a scrolled view. */
+	if (W != was_w || H != was_h)
+		show_sel();
+	else
+		top = MAX(MIN(top, nmatches - rows_vis()), 0);
 	configured = 1;
 	need_commit = 1;
 	dirty = 1;
@@ -1346,6 +1421,7 @@ static void cursor_load(void)
 	cursor_theme = NULL;
 	cursor_img = NULL;
 	cursor_scale = 0;       /* tried again at the next enter if it fails */
+	cursor_loads++;
 	const char *s = getenv("XCURSOR_SIZE");
 	int size = s && atoi(s) > 0 ? atoi(s) : 24;
 	cursor_theme = wl_cursor_theme_load(getenv("XCURSOR_THEME"), size * scale, shm);
@@ -1397,9 +1473,12 @@ static void surf_preferred_scale(void *data, struct wl_surface *s, int32_t facto
 		return;
 	scale = factor;
 	dirty = 1;
-	/* Now, not at the next enter: the pointer may stay on the window. */
-	cursor_load();
-	cursor_show();
+	/* Now, not at the next enter: the pointer may stay on the window. Without
+	 * a theme yet the first enter loads it. */
+	if (cursor_theme) {
+		cursor_load();
+		cursor_show();
+	}
 }
 
 static void surf_preferred_transform(void *data, struct wl_surface *s,
@@ -1460,8 +1539,9 @@ static void state_write(void)
 {
 	static char last[2 * sizeof line + 512];
 	char now[sizeof last], tmp[PATH_MAX];
-	snprintf(now, sizeof now, "keys %u\nsel %d\ntop %d\nmatches %d\nvisible %d\n"
-		"line %s\nstatus %s\n", keys_seen, sel, top, nmatches, rows_vis(), line,
+	snprintf(now, sizeof now, "syncs %u\ndirs %u\ndraws %u\ndirty %d\ncursors %u\n"
+		"sel %d\ntop %d\nmatches %d\nvisible %d\nline %s\nstatus %s\n", syncs,
+		dirs_read, draws, dirty, cursor_loads, sel, top, nmatches, rows_vis(), line,
 		status_msg);
 	if (!strcmp(now, last) ||
 	    (size_t)snprintf(tmp, sizeof tmp, "%s.tmp", test_state) >= sizeof tmp)
@@ -1483,6 +1563,13 @@ static void lost_connection(void)
 
 int main(int argc, char **argv)
 {
+	/* With 0, 1 or 2 closed the Wayland socket could get one of them, and a
+	 * child that can't exec would write its error into the connection. */
+	int null;
+	while ((null = open("/dev/null", O_RDWR)) >= 0 && null <= 2)
+		;
+	if (null > 2)
+		close(null);
 	if (argc > 1) {
 		if (!strcmp(argv[1], "-v")) {
 			printf("mrun %s\n", MRUN_VERSION);
@@ -1508,13 +1595,13 @@ int main(int argc, char **argv)
 	compose_init();
 	struct wl_registry *registry = wl_display_get_registry(dpy);
 	wl_registry_add_listener(registry, &registry_listener, NULL);
-	wl_display_roundtrip(dpy);
+	if (wl_display_roundtrip(dpy) < 0)
+		lost_connection();
 	if (!compositor || !shm || !wm_base) {
 		fprintf(stderr, "mrun: the compositor lacks wl_compositor 4, wl_shm "
 			"or xdg_wm_base\n");
 		return 1;
 	}
-	cursor_load();
 	theme_init();
 	scan_path();
 	update_matches();

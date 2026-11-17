@@ -61,11 +61,33 @@ program "$A" "$(printf 'bad\001')" badctl    # a control character: not offered
 program "$A" "$(printf 'bad\377')" badutf    # not UTF-8: not offered
 for i in $(seq -w 1 30); do program "$A" "zz$i"; done   # more than fit
 PROGS=$A:$Z
+# Names the shell could misread, kept out of the list the other tests count on.
+Q=$SMOKE_DIR/bin-q
+mkdir -p "$Q"
+program "$Q" -dash dash
+program "$Q" x=y xy
+program "$Q" if ifword
+program "$Q" été ete
+ln -s bin-a "$SMOKE_DIR/alink"
+
+# Compose sequences of plain keys: é, ten of them, and the longest runs of x that
+# fit in a key's text (63 bytes), and 54 of them.
+X63=$(printf '%063d' 0 | tr 0 x)
+X54=${X63:9}
+{
+	printf '<q> <a> : "alpha"\n'
+	printf '<q> <e> : "é"\n'
+	printf '<q> <u> : "éééééééééé"\n'
+	printf '<q> <x> : "%s"\n' "$X63"
+	printf '<q> <b> : "%s"\n' "$X54"
+} >"$SMOKE_DIR/Compose"
 
 MSTATE=$SMOKE_DIR/mrun-state
-mrun_start() { # [PATH [directory]]
+mrun_start() { # [PATH [directory [nostderr]]]
 	rm -f "$MSTATE"
-	(cd "${2:-.}" && PATH=${1:-$PROGS} WAYLAND_DISPLAY=wayland-0 \
+	(cd "${2:-.}" || exit
+		[ "${3:-}" = nostderr ] && exec 2>&-
+		PATH=${1:-$PROGS} WAYLAND_DISPLAY=wayland-0 \
 		MRUN_TEST_STATE=$MSTATE exec "$MRUN") >>"$MRUN_LOG" 2>&1 &
 	MRUN_PID=$!
 	check "mrun has a focused window" '[ "$(get mrun kbfocus)" = 1 ]'
@@ -95,17 +117,29 @@ mstate() {
 	sed -n "s/^$1 //p" "$MSTATE" 2>/dev/null
 }
 
-# Until mrun has handled all input so far: F6, which it ignores, has come through.
+# Until mrun has handled all input so far: it counts F6 and does nothing else
+# with it, and keys come in order.
 mrun_sync() {
 	local n i
-	n=$(mstate keys)
+	n=$(mstate syncs)
 	do_input key F6
 	for ((i = 0; i < 100; i++)); do
 		kill -0 "$MRUN_PID" 2>/dev/null || return 1
-		[ "$(mstate keys)" -gt "${n:-0}" ] 2>/dev/null && return 0
+		[ "$(mstate syncs)" -gt "${n:-0}" ] 2>/dev/null && return 0
 		sleep 0.05
 	done
 	fail "mrun didn't handle F6"
+}
+
+# mrun_draws: how many frames mrun has drawn once all input so far is drawn.
+mrun_draws() {
+	local i
+	mrun_sync || fail "mrun ended"
+	for ((i = 0; i < 100; i++)); do
+		[ "$(mstate dirty)" = 0 ] && { mstate draws; return 0; }
+		sleep 0.05
+	done
+	fail "mrun has still not drawn"
 }
 
 # expect_state <description> <key> <value>
@@ -224,6 +258,10 @@ type_text zeta
 do_input key Return
 expect_ran "a link counts" alpha ""
 
+mrun_start "$A:$A/:$SMOKE_DIR/alink:$Z"
+expect_state "a directory named again in PATH is read once" dirs 2
+mrun_quit
+
 # ---- what isn't a program -------------------------------------------------------
 
 for name in nothing delta epsilon hidden; do
@@ -251,6 +289,19 @@ still_open "Return on an empty line does nothing"
 do_input key Down
 do_input key Return
 expect_ran "but Down chooses the first of all" alpha ""
+
+mrun_start
+do_input key Up
+do_input key Return
+expect_ran "and Up the last" zz30 ""
+
+mrun_start
+type_text "  "
+do_input key Return
+still_open "Return on a line of blanks does nothing"
+do_input key Down
+do_input key Return
+expect_ran "but runs what is chosen" alpha ""
 
 # A relative PATH entry means the directory it happens to be started in.
 mkdir "$SMOKE_DIR/cwd"
@@ -327,6 +378,33 @@ mrun_start "$PROGS" "$A"
 type_text ./alpha
 do_input key Return
 expect_ran "a path without a blank goes to the shell" alpha ""
+
+mrun_start "$Q:$A"
+type_text "-dash x"
+do_input key Return
+expect_ran "a line starting with - is a command, not shell options" dash "x"
+
+mrun_start "$Q:$A"
+type_text x
+do_input key Tab
+type_text a
+do_input key Return
+expect_ran "Tab quotes a name with =, not an assignment" xy "a"
+
+mrun_start "$Q:$A"
+type_text if
+do_input key Tab
+type_text a
+do_input key Return
+expect_ran "and a reserved word" ifword "a"
+
+mrun_start
+type_text alp
+do_input key Down
+type_text " x"
+do_input key Tab
+expect_state "typing the arguments keeps what is chosen" line "alphabet x"
+mrun_quit
 
 # ---- editing -------------------------------------------------------------------
 
@@ -412,7 +490,6 @@ do_input key Return
 expect_ran "the same name in another case is listed once" lowgamma ""
 
 # A compose sequence of its own, from plain keys: q then a is "alpha".
-printf '<q> <a> : "alpha"\n' >"$SMOKE_DIR/Compose"
 XCOMPOSEFILE=$SMOKE_DIR/Compose mrun_start
 do_input key q
 do_input key a
@@ -424,12 +501,64 @@ do_input key Escape
 mrun_exits "Esc in the middle of a compose sequence"
 echo "ok: Esc in the middle of a compose sequence still ends it"
 
+# Characters of more than one byte: q then e is "é".
+XCOMPOSEFILE=$SMOKE_DIR/Compose mrun_start
+type_text qe
+do_input key BackSpace
+type_text alpha
+do_input key Return
+expect_ran "Backspace takes a character of two bytes" alpha ""
+XCOMPOSEFILE=$SMOKE_DIR/Compose mrun_start
+type_text alphqe
+do_input key Left
+do_input key Right
+do_input key BackSpace
+type_text a
+do_input key Return
+expect_ran "Left and Right step over it" alpha ""
+XCOMPOSEFILE=$SMOKE_DIR/Compose mrun_start
+type_text qealpha
+do_input key Home
+do_input key Delete
+do_input key Return
+expect_ran "and Delete takes it" alpha ""
+
+XCOMPOSEFILE=$SMOKE_DIR/Compose mrun_start "$Q:$A"
+type_text qetqe
+do_input key Return
+expect_ran "a name that isn't ASCII" ete ""
+XCOMPOSEFILE=$SMOKE_DIR/Compose mrun_start "$Q:$A"
+type_text qetqe
+do_input key Tab
+type_text x
+do_input key Return
+expect_ran "is quoted by Tab" ete "x"
+
+# The status line is cut to its size on a character, not in one: after "a" or "ab".
+for start in a ab; do
+	XCOMPOSEFILE=$SMOKE_DIR/Compose mrun_start
+	type_text "$start"
+	for ((i = 0; i < 13; i++)); do type_text qu; done
+	do_input key Return
+	mrun_sync || fail "a long name not found: mrun ended"
+	[ -n "$(mstate status)" ] && mstate status | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 ||
+		fail "the status line after '$start' is not UTF-8: $(mstate status | od -c | tail -3)"
+	mrun_quit
+done
+echo "ok: a long status is cut on a character"
+
 # ---- the mouse -----------------------------------------------------------------
 
 mrun_start
 type_text al
+mrun_draws >/dev/null
+# Until the chosen row is on screen, then measured in that one screenshot.
+row_shown() {
+	WAYLAND_DISPLAY=wayland-0 grim "$SMOKE_DIR/s.png" &&
+		[ "$(build/pngtool count "$SMOKE_DIR/s.png" $((CX + 200)) "$CY" 1 120 "$SEL" 0)" -gt 0 ]
+}
+wait_for "the chosen row is drawn" row_shown
 for ((y = CY; y < CY + 120; y++)); do
-	WAYLAND_DISPLAY=wayland-0 grim "$SMOKE_DIR/s.png" || fail "no screenshot"
 	[ "$(build/pngtool pixel "$SMOKE_DIR/s.png" $((CX + 200)) "$y")" = "$SEL" ] && break
 done
 [ "$y" -lt $((CY + 120)) ] || fail "no chosen row found"
@@ -471,12 +600,46 @@ do_input click left
 expect_ran "a double click keeps the arguments" alphabet "x"
 
 mrun_start
+type_text al
+do_input move $((CX + 100)) $((CY + ROW0 + ROWH / 2))
+do_input click left
+do_input move $((CX + 100)) $((CY + ROW0 + ROWH + ROWH / 2))
+do_input click left
+still_open "two clicks on two rows are no double click"
+expect_state "the second chooses" sel 1
+mrun_quit
+
+# A line as long as it can be: "al" and 4086 or 4087 x after the blank. With
+# "alphabet" for "al" the shorter still fits, the longer doesn't.
+long_line() { # <the last sequence>
+	type_text "al "
+	for ((i = 0; i < 64; i++)); do type_text qx; done
+	type_text "$1"
+}
+XCOMPOSEFILE=$SMOKE_DIR/Compose mrun_start
+long_line qbx
+expect_state "a line of 4090 bytes" line "al $(printf '%04087d' 0 | tr 0 x)"
+do_input move $((CX + 100)) $((CY + ROW0 + ROWH + ROWH / 2))
+do_input click left
+do_input click left
+still_open "a double click with no room for the name runs nothing"
+expect_state "and says so" status "the line has no room for the name"
+mrun_quit
+XCOMPOSEFILE=$SMOKE_DIR/Compose mrun_start
+long_line qb
+do_input move $((CX + 100)) $((CY + ROW0 + ROWH + ROWH / 2))
+do_input click left
+do_input click left
+expect_ran "a name that just fits is taken" alphabet "$(printf '%04086d' 0 | tr 0 x)"
+
+mrun_start
 type_text alp
 do_input move $((CX + 100)) $((CY + ROW0 + 200))
 do_input click left
 do_input click left
 still_open "a double click below the rows does nothing"
 do_input key ctrl+u
+mrun_sync || fail "Ctrl+U: mrun ended"
 [ "$(mstate matches)" -gt "$(mstate visible)" ] || fail "too few names to scroll"
 do_input move $((CX + 100)) $((CY + ROW0 + ROWH))
 do_input wheel 1
@@ -485,6 +648,31 @@ do_input wheel -1
 expect_state "and back" top 0
 still_open "and only scrolls"
 [ "$(mstate sel)" = -1 ] || fail "the wheel chose $(mstate sel)"
+do_input wheel 1
+expect_state "the wheel again" top 3
+# Another window takes the focus and gives it back: configures of the same size.
+(PATH=$PROGS WAYLAND_DISPLAY=wayland-0 MRUN_TEST_STATE=$SMOKE_DIR/mrun2-state \
+	exec "$MRUN") >>"$MRUN_LOG" 2>&1 &
+MRUN2_PID=$!
+wait_for "a second mrun has drawn" eval '[ "$(sed -n "s/^draws //p" "$SMOKE_DIR/mrun2-state" 2>/dev/null)" -gt 0 ] 2>/dev/null'
+kill "$MRUN2_PID"
+wait "$MRUN2_PID"
+check "the first has it back" '[ "$(get mrun kbfocus)" = 1 ]'
+expect_state "and is still scrolled" top 3
+mrun_quit
+
+# Keys and wheel turns that change nothing draw nothing.
+mrun_start
+type_text alp
+do_input key Down
+do_input move $((CX + 100)) $((CY + ROW0 + ROWH))
+n=$(mrun_draws)
+do_input key Down
+do_input key Right
+do_input key End
+do_input wheel -1
+[ "$(mrun_draws)" = "$n" ] || fail "nothing changed, and mrun drew $(($(mrun_draws) - n)) frames"
+echo "ok: what changes nothing draws nothing"
 mrun_quit
 
 # ---- starting ------------------------------------------------------------------
@@ -496,7 +684,36 @@ type_text gone
 do_input key Return
 still_open "a program that can't start leaves it open"
 expect_state "and says why" status "cannot start: No such file or directory"
+do_input key ctrl+u
+type_text alpha
+do_input key Return
+expect_ran "and a program after it starts" alpha ""
+
+# Started with stderr closed: the error of the child doesn't go into the connection.
+program "$A" gone
+mrun_start "$PROGS" . nostderr
+rm "$A/gone"
+type_text gone
+do_input key Return
+still_open "with stderr closed it stays connected"
+expect_state "and says why" status "cannot start: No such file or directory"
 mrun_quit
+
+# A socket that is no compositor: it closes the connection at once.
+python3 -c 'import socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.bind(sys.argv[1])
+s.listen()
+while True:
+	s.accept()[0].close()' "$SMOKE_DIR/notwayland" &
+FAKE_PID=$!
+wait_for "a socket that isn't Wayland" test -S "$SMOKE_DIR/notwayland"
+err=$(WAYLAND_DISPLAY=$SMOKE_DIR/notwayland "$MRUN" 2>&1)
+kill "$FAKE_PID"
+case $err in
+*"lost the connection"*) echo "ok: a connection closed at once is reported as that" ;;
+*) fail "a connection closed at once: $err" ;;
+esac
 
 # ---- ending --------------------------------------------------------------------
 
@@ -589,6 +806,7 @@ cursor_ok='[ "$(global cursor cw)" -gt 0 ] && [ $(($(global cursor cw) % $(globa
 	[ $(($(global cursor ch) % $(global cursor cscale))) = 0 ]'
 do_input move $((2 * (CX + 100))) $((2 * (CY + 40)))   # vinput counts in pixels
 check "the cursor at scale 2" "$cursor_ok && [ \"\$(global cursor cscale)\" = 2 ]"
+expect_state "the theme is loaded once, at that scale" cursors 1
 CW2=$(global cursor cw)
 sed -i 's/outputScale: 2/outputScale: 5/' "$XDG_CONFIG_HOME/mwc/mwmrc"
 reload_mwc
