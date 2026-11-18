@@ -17,7 +17,8 @@
  * Mouse:  click chooses, double click runs, wheel scrolls.
  *
  * Without a blank, Return runs the chosen program directly. With a blank, the line
- * goes to the shell as it is, so it can have arguments and shell syntax. Nothing
+ * goes to the shell as it is, so it can have arguments and shell syntax. A blank
+ * in single quotes or after a backslash is part of the name, as for the shell. Nothing
  * runs in a terminal, and what a program prints goes where mrun's output goes.
  */
 #define _GNU_SOURCE
@@ -979,14 +980,19 @@ static void move_cur(size_t to)
 }
 
 /* For a shortcut: in a layout without Latin letters, such as Russian, Ctrl+U is the
- * key that is U in the first layout, as GTK and Qt read it. */
+ * key that is U in the first layout that has Latin letters, as Qt reads it. */
 static xkb_keysym_t latin_sym(uint32_t kc, xkb_keysym_t ks)
 {
-	const xkb_keysym_t *syms;
-	if (ks <= 0xff ||
-	    xkb_keymap_key_get_syms_by_level(kb_map, kc, 0, 0, &syms) < 1)
+	if (ks <= 0xff)
 		return ks;
-	return syms[0];
+	xkb_layout_index_t n = xkb_keymap_num_layouts_for_key(kb_map, kc);
+	for (xkb_layout_index_t g = 0; g < n; g++) {
+		const xkb_keysym_t *syms;
+		if (xkb_keymap_key_get_syms_by_level(kb_map, kc, g, 0, &syms) > 0 &&
+		    syms[0] <= 0xff)
+			return syms[0];
+	}
+	return ks;
 }
 
 static void key(uint32_t kc, xkb_keysym_t ks, const char *txt, int n)

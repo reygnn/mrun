@@ -30,11 +30,13 @@ the reason in the status line.
 
 Return runs one of two things. A line without a blank runs the chosen program directly,
 without a shell, so `fire` starts Firefox if that is the first match. Without a match
-the status line says so, unless the line has a `/`; then that file is started, or the
-line goes to the shell if it has characters the shell reads, such as `~`. A line
-with a blank goes to `/bin/sh -c` as it is, so arguments and shell syntax work, such
-as `firefox --private-window` or `sleep 5; foot`. On a line that is empty or only
-blanks Return does nothing until a program is chosen.
+the status line says so, unless the line has a `/`; then that file is started if the
+line has nothing but ASCII letters, digits and `_+-.,:@%/`, and anything else, such
+as `~` or a letter that isn't ASCII, sends it to the shell. A line with a blank goes
+to `/bin/sh -c` as it is, so arguments and shell syntax work, such as
+`firefox --private-window` or `sleep 5; foot`. A blank in single quotes or after a
+backslash is part of the name, as for the shell, so `'two words'` is a program. On a
+line that is empty or only blanks Return does nothing until a program is chosen.
 
 Tab and a double click with arguments put the name in single quotes if the shell would
 read it otherwise, such as a name with a blank or `=`, or a word like `if`. Typing the

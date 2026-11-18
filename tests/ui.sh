@@ -108,6 +108,7 @@ type_text() {
 		.) c=period ;;
 		-) c=minus ;;
 		"'") c=apostrophe ;;
+		'$') c=shift+4 ;;
 		[A-Z]) c=shift+${c,} ;;
 		esac
 		do_input key "$c"
@@ -419,6 +420,11 @@ mrun_start "$PROGS" "$A"
 type_text ./alpha
 do_input key Return
 expect_ran "a path without a blank runs that file" alpha ""
+
+mrun_start
+type_text '$HOME/../bin-a/alpha'
+do_input key Return
+expect_ran "a path with \$ goes to the shell" alpha ""
 
 mrun_start "$PROGS" "$A"
 type_text ./nosuch
@@ -760,6 +766,7 @@ for ((i = 0; i < 15; i++)); do
 	sleep 0.1
 done
 do_input lift BackSpace
+[ "$n" -gt 0 ] || fail "the line was empty before the keyboard went"
 second_mrun_end
 echo "ok: losing the keyboard stops a repeating key"
 mrun_quit
@@ -951,6 +958,23 @@ do_input key ctrl+q
 mrun_exits "Ctrl+Q in it"
 do_input group 0
 echo "ok: Ctrl+U and Ctrl+Q in a layout without Latin letters"
+
+# And with that layout the first: the Latin letters come from the second.
+stop_vinput
+start_vinput 1280 720 ru,us
+mrun_start
+do_input group 1
+type_text beta
+do_input group 0
+do_input key u
+expect_state "the first layout types Cyrillic" line "betaг"
+do_input key ctrl+u
+expect_state "Ctrl+U with the Latin layout second" line ""
+do_input key ctrl+q
+mrun_exits "Ctrl+Q with the Latin layout second"
+stop_vinput
+start_vinput 1280 720 us,ru
+echo "ok: Ctrl+U and Ctrl+Q with the Latin layout second"
 
 # What it starts goes on without it, in a session of its own, without its input.
 mrun_start

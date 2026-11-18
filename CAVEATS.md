@@ -5,8 +5,8 @@ Limits of mrun that are known and left as they are.
 
 ## Starting programs
 
-A line with a blank goes to the shell, and so does a path with characters the shell
-reads, such as `~` or `$`. mrun quits right after starting the shell; whether the
+A line with a blank goes to the shell, and so does a path with anything but ASCII
+letters, digits and `_+-.,:@%/`, such as `~`, `$` or a letter that isn't ASCII. mrun quits right after starting the shell; whether the
 command really started, mrun can't see.
 
 The list is read once at the start; a program installed while mrun is open is not in
