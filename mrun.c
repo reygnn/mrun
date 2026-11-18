@@ -7,7 +7,8 @@
  * exact names first, then those starting with the text, then those containing it,
  * ignoring case. It reads the same colours as mwc: MWC_INACTIVE / MWC_ACTIVE from
  * the environment, else Mwm*background and Mwm*activeBackground from
- * ~/.config/mwc/mwmrc, else the Motif defaults; the text in Mwm*foreground.
+ * $XDG_CONFIG_HOME/mwc/mwmrc (~/.config/mwc/mwmrc), else the Motif defaults; the
+ * text in Mwm*foreground.
  *
  * Keys:   typing  narrows the list      Up/Down/PgUp/PgDn  choose
  *         Return  run                   Tab  take the chosen name
@@ -66,6 +67,7 @@ struct rect { int x, y, w, h; };
 struct prog {
 	char *path;             /* as found in $PATH, what is started */
 	const char *name;       /* in path */
+	char *fold;             /* the name case folded, to match and sort by */
 	int order;              /* of finding it: the first in $PATH wins */
 };
 
@@ -163,7 +165,7 @@ static uint64_t now_ms(void)
 static int prog_cmp(const void *a, const void *b)
 {
 	const struct prog *p = a, *q = b;
-	int c = strcasecmp(p->name, q->name);
+	int c = strcmp(p->fold, q->fold);
 	if (!c)
 		c = strcmp(p->name, q->name);
 	return c ? c : p->order - q->order;
@@ -243,6 +245,7 @@ static void scan_path(void)
 			}
 			sprintf(pr->path, "%s/%s", dir, e->d_name);
 			pr->name = pr->path + dl + 1;
+			pr->fold = g_utf8_casefold(pr->name, -1);
 			pr->order = nnames++;
 		}
 		closedir(d);
@@ -253,10 +256,12 @@ static void scan_path(void)
 	/* The same name twice: the shell would only ever find the first. */
 	int kept = 0;
 	for (int i = 0; i < nnames; i++) {
-		if (kept && !strcmp(progs[kept - 1].name, progs[i].name))
+		if (kept && !strcmp(progs[kept - 1].name, progs[i].name)) {
 			free(progs[i].path);
-		else
+			g_free(progs[i].fold);
+		} else {
 			progs[kept++] = progs[i];
+		}
 	}
 	nnames = kept;
 	if (!(matches = malloc((size_t)(nnames + 1) * sizeof *matches))) {
@@ -265,10 +270,30 @@ static void scan_path(void)
 	}
 }
 
-/* The length of the first word of the line. */
+/* The first word of the line as the shell splits it, quoted as shell_word quotes:
+ * its length, and in out (if not NULL) its text without the quotes. */
+static size_t first_word_text(char *out)
+{
+	size_t i = 0, o = 0;
+	int quoted = 0;
+	for (; line[i] && (quoted || (line[i] != ' ' && line[i] != '\t')); i++) {
+		if (line[i] == '\'') {
+			quoted = !quoted;
+			continue;
+		}
+		if (!quoted && line[i] == '\\' && line[i + 1])
+			i++;            /* the '\'' in a quoted quote */
+		if (out)
+			out[o++] = line[i];
+	}
+	if (out)
+		out[o] = 0;
+	return i;
+}
+
 static size_t first_word(void)
 {
-	return strcspn(line, " \t");
+	return first_word_text(NULL);
 }
 
 static int only_blanks(void)
@@ -316,32 +341,37 @@ static void update_matches(void)
 {
 	static char q[sizeof line];
 	static int have_q;
-	size_t qlen = first_word();
+	char word[sizeof line];
+	first_word_text(word);
 	status_msg[0] = 0;
 	dirty = 1;
-	/* Typing the arguments keeps the list, and what is chosen in it. */
-	if (have_q && !strncmp(q, line, qlen) && !q[qlen])
+	/* Typing the arguments keeps the list, and what is chosen in it; so does Tab,
+	 * which only quotes the name. */
+	if (have_q && !strcmp(q, word))
 		return;
-	memcpy(q, line, qlen);
-	q[qlen] = 0;
+	strcpy(q, word);
 	have_q = 1;
+	last_click_row = -1;    /* a click on another list is no double click */
 	nmatches = 0;
+	char *fq = g_utf8_casefold(q, -1);
+	size_t fl = strlen(fq);
 	/* The exact name as typed goes before the same in another case. */
 	for (int rank = 0; rank < 4; rank++) {
 		for (int i = 0; i < nnames; i++) {
-			const char *n = progs[i].name;
-			int is_prefix = !strncasecmp(n, q, qlen);
-			int is_exact = is_prefix && !n[qlen];
-			int as_typed = is_exact && !strcmp(n, q);
+			const char *f = progs[i].fold;
+			int is_prefix = !strncmp(f, fq, fl);
+			int is_exact = is_prefix && !f[fl];
+			int as_typed = is_exact && !strcmp(progs[i].name, q);
 			if (rank == 0 ? as_typed :
 			    rank == 1 ? is_exact && !as_typed :
 			    rank == 2 ? is_prefix && !is_exact :
-			    !is_prefix && strcasestr(n, q))
+			    !is_prefix && strstr(f, fq))
 				matches[nmatches++] = i;
 		}
 	}
+	g_free(fq);
 	/* With nothing typed nothing is chosen, so Return doesn't run the first of all. */
-	sel = qlen && nmatches ? 0 : -1;
+	sel = q[0] && nmatches ? 0 : -1;
 	top = 0;
 }
 
@@ -381,9 +411,10 @@ static void run_argv(const char *file, char *const argv[])
 		}
 		execvp(file, argv);
 		int err = errno;
-		fprintf(stderr, "mrun: %s: %s\n", file, strerror(err));
+		/* The pipe first: a stderr nobody reads any more would end it here. */
 		while (write(fds[1], &err, sizeof err) < 0 && errno == EINTR)
 			;
+		fprintf(stderr, "mrun: %s: %s\n", file, strerror(err));
 		_exit(127);
 	}
 	close(fds[1]);
@@ -413,6 +444,11 @@ static void run_line(void)
 	run_argv("/bin/sh", argv);
 }
 
+/* What a word can have that the shell reads as it is. No "=": a name with it at
+ * the start would be an assignment. */
+static const char shell_plain[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	"0123456789_+-.,:@%/";
+
 /* Return. With a blank the line is what the user wants, whatever is chosen. */
 static void activate(void)
 {
@@ -422,6 +458,8 @@ static void activate(void)
 		run_prog(&progs[matches[sel]]);
 	else if (only_blanks())
 		return;
+	else if (strchr(line, '/') && !line[strspn(line, shell_plain)])
+		run_argv(line, (char *[]){ line, NULL });     /* its error comes back */
 	else if (strchr(line, '/'))
 		run_line();
 	else
@@ -441,12 +479,10 @@ static int reserved(const char *n)
 }
 
 /* The name as the shell reads it: in single quotes if it has anything but
- * letters, digits and a few harmless characters, or is a reserved word. No "=":
- * a name with it would be an assignment. */
+ * shell_plain, or is a reserved word. */
 static size_t shell_word(const char *n, char *out, size_t size)
 {
-	if (!n[strspn(n, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	    "0123456789_+-.,:@%/")] && !reserved(n))
+	if (!n[strspn(n, shell_plain)] && !reserved(n))
 		return (size_t)snprintf(out, size, "%s", n);
 	size_t o = 0;
 	out[o++] = '\'';
@@ -733,6 +769,8 @@ static void theme_init(void)
 	plo = pango_layout_new(pctx);
 	pango_layout_set_font_description(plo, desc);
 	pango_layout_set_single_paragraph_mode(plo, TRUE);
+	/* Left aligned also for a name that starts right to left. */
+	pango_layout_set_auto_dir(plo, FALSE);
 	PangoFontMetrics *m = pango_context_get_metrics(pctx, desc, NULL);
 	font_asc = PANGO_PIXELS_CEIL(pango_font_metrics_get_ascent(m));
 	font_desc = PANGO_PIXELS_CEIL(pango_font_metrics_get_descent(m));
@@ -1583,6 +1621,8 @@ int main(int argc, char **argv)
 	}
 	setlocale(LC_ALL, "");
 	test_state = getenv("MRUN_TEST_STATE");
+	if (test_state && !*test_state)
+		test_state = NULL;
 
 	if (!(dpy = wl_display_connect(NULL))) {
 		fprintf(stderr, "mrun: cannot connect to a Wayland compositor\n");
@@ -1633,12 +1673,15 @@ int main(int argc, char **argv)
 		if (wl_display_prepare_read(dpy) != 0)
 			continue;       /* events arrived in the meantime */
 		short dev = POLLIN;
+		/* On EPIPE the compositor may have said why before it closed: read on,
+		 * and the dispatch reports it. */
 		if (wl_display_flush(dpy) < 0) {
-			if (errno != EAGAIN) {
+			if (errno == EAGAIN) {
+				dev |= POLLOUT;
+			} else if (errno != EPIPE) {
 				wl_display_cancel_read(dpy);
 				lost_connection();
 			}
-			dev |= POLLOUT;
 		}
 		int timeout = -1;
 		if (repeat_kc) {

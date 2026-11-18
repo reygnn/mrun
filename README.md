@@ -30,7 +30,8 @@ the reason in the status line.
 
 Return runs one of two things. A line without a blank runs the chosen program directly,
 without a shell, so `fire` starts Firefox if that is the first match. Without a match
-the status line says so, unless the line has a `/`; then it goes to the shell. A line
+the status line says so, unless the line has a `/`; then that file is started, or the
+line goes to the shell if it has characters the shell reads, such as `~`. A line
 with a blank goes to `/bin/sh -c` as it is, so arguments and shell syntax work, such
 as `firefox --private-window` or `sleep 5; foot`. On a line that is empty or only
 blanks Return does nothing until a program is chosen.
@@ -68,9 +69,9 @@ Programs run in a session of their own, without a terminal: a terminal program s
 | `MWC_INACTIVE`, `MWC_ACTIVE` | `#aeb2c3`, `#7387ad` | background, chosen row |
 
 The colours are mwc's: `MWC_INACTIVE` and `MWC_ACTIVE` from the environment, else
-`Mwm*background` and `Mwm*activeBackground` from `~/.config/mwc/mwmrc`, else the Motif
-defaults. The text is `Mwm*foreground` where it is set, else black or white, whichever
-reads better.
+`Mwm*background` and `Mwm*activeBackground` from `$XDG_CONFIG_HOME/mwc/mwmrc` (by
+default `~/.config/mwc/mwmrc`), else the Motif defaults. The text is `Mwm*foreground`
+where it is set, else black or white, whichever reads better.
 
 
 ## How this is built

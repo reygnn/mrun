@@ -77,6 +77,7 @@ X54=${X63:9}
 {
 	printf '<q> <a> : "alpha"\n'
 	printf '<q> <e> : "é"\n'
+	printf '<q> <E> : "É"\n'
 	printf '<q> <u> : "éééééééééé"\n'
 	printf '<q> <x> : "%s"\n' "$X63"
 	printf '<q> <b> : "%s"\n' "$X54"
@@ -87,6 +88,7 @@ mrun_start() { # [PATH [directory [nostderr]]]
 	rm -f "$MSTATE"
 	(cd "${2:-.}" || exit
 		[ "${3:-}" = nostderr ] && exec 2>&-
+		[ "${3:-}" = brokenstderr ] && exec 2> >(exec true)
 		PATH=${1:-$PROGS} WAYLAND_DISPLAY=wayland-0 \
 		MRUN_TEST_STATE=$MSTATE exec "$MRUN") >>"$MRUN_LOG" 2>&1 &
 	MRUN_PID=$!
@@ -165,11 +167,12 @@ mrun_exits() { # <description>: must end by itself, and with status 0
 expect_ran() { # <description> <mark> <arguments>
 	local i
 	mrun_exits "$1"
+	# Not empty: echo creates the file before it writes, and always writes a newline.
 	for ((i = 0; i < 50; i++)); do
-		[ -e "$MARKS/$2" ] && break
+		[ -s "$MARKS/$2" ] && break
 		sleep 0.1
 	done
-	[ -e "$MARKS/$2" ] || fail "$1: $2 didn't run (ran: $(ls "$MARKS" | xargs))"
+	[ -s "$MARKS/$2" ] || fail "$1: $2 didn't run (ran: $(ls "$MARKS" | xargs))"
 	[ "$(cat "$MARKS/$2")" = "$3" ] || fail "$1: $2 got '$(cat "$MARKS/$2")', not '$3'"
 	rm "$MARKS/$2"
 	[ -z "$(ls "$MARKS")" ] || fail "$1: also ran $(ls "$MARKS" | xargs)"
@@ -180,6 +183,31 @@ still_open() { # <description>: nothing ran, and it is there
 	mrun_sync || fail "$1: mrun ended"
 	[ -z "$(ls "$MARKS")" ] || fail "$1: ran $(ls "$MARKS" | xargs)"
 	echo "ok: $1"
+}
+
+# mrun_focus: from the refreshed mwc state, how many mrun windows there are and
+# where the one with the keyboard is, as "N X,Y".
+mrun_focus() {
+	awk '$1 == "view" && $2 == "app=mrun" {
+		n++
+		for (i = 3; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
+		if (v["kbfocus"] == 1) at = v["x"] "," v["y"]
+	} END { print n + 0, at }' "$MWC_TEST_STATE"
+}
+
+# second_mrun: another mrun takes the keyboard; second_mrun_end gives it back.
+second_mrun() {
+	refresh
+	FIRST_AT=$(get mrun x),$(get mrun y)
+	(PATH=$PROGS WAYLAND_DISPLAY=wayland-0 exec "$MRUN") >>"$MRUN_LOG" 2>&1 &
+	MRUN2_PID=$!
+	check "a second mrun has the keyboard" \
+		'set -- $(mrun_focus); [ "$1" = 2 ] && [ -n "$2" ] && [ "$2" != "$FIRST_AT" ]'
+}
+second_mrun_end() {
+	kill "$MRUN2_PID"
+	wait "$MRUN2_PID"
+	check "the first has it back" '[ "$(mrun_focus)" = "1 $FIRST_AT" ]'
 }
 
 mrun_quit() {
@@ -364,6 +392,19 @@ type_text x
 do_input key Return
 expect_ran "and one with a quote" its "x"
 
+# The list after Tab is that name, still chosen, and Tab again changes nothing.
+for name in two "it'"; do
+	mrun_start
+	type_text "$name"
+	do_input key Tab
+	expect_state "Tab on '$name' keeps it chosen" sel 0
+	expect_state "and the list is the name" matches 1
+	before=$(mstate line)
+	do_input key Tab
+	expect_state "and Tab again changes nothing" line "$before"
+	mrun_quit
+done
+
 mrun_start
 type_text "alpha x; beta y"
 do_input key Return
@@ -377,7 +418,14 @@ echo "ok: a line with a blank is shell syntax"
 mrun_start "$PROGS" "$A"
 type_text ./alpha
 do_input key Return
-expect_ran "a path without a blank goes to the shell" alpha ""
+expect_ran "a path without a blank runs that file" alpha ""
+
+mrun_start "$PROGS" "$A"
+type_text ./nosuch
+do_input key Return
+still_open "a path that isn't there leaves it open"
+expect_state "and says why" status "cannot start: No such file or directory"
+mrun_quit
 
 mrun_start "$Q:$A"
 type_text "-dash x"
@@ -533,6 +581,10 @@ do_input key Tab
 type_text x
 do_input key Return
 expect_ran "is quoted by Tab" ete "x"
+XCOMPOSEFILE=$SMOKE_DIR/Compose mrun_start "$Q:$A"
+type_text qEtqe
+do_input key Return
+expect_ran "and is found in another case" ete ""
 
 # The status line is cut to its size on a character, not in one: after "a" or "ab".
 for start in a ab; do
@@ -681,14 +733,123 @@ still_open "and only scrolls"
 do_input wheel 1
 expect_state "the wheel again" top 3
 # Another window takes the focus and gives it back: configures of the same size.
-(PATH=$PROGS WAYLAND_DISPLAY=wayland-0 MRUN_TEST_STATE=$SMOKE_DIR/mrun2-state \
-	exec "$MRUN") >>"$MRUN_LOG" 2>&1 &
-MRUN2_PID=$!
-wait_for "a second mrun has drawn" eval '[ "$(sed -n "s/^draws //p" "$SMOKE_DIR/mrun2-state" 2>/dev/null)" -gt 0 ] 2>/dev/null'
-kill "$MRUN2_PID"
-wait "$MRUN2_PID"
-check "the first has it back" '[ "$(get mrun kbfocus)" = 1 ]'
+second_mrun
+second_mrun_end
 expect_state "and is still scrolled" top 3
+# M2: the wheel stops at the end, and a turn past it draws nothing.
+do_input wheel 20
+mrun_sync || fail "the wheel to the end: mrun ended"
+[ "$(mstate top)" = $(($(mstate matches) - $(mstate visible))) ] ||
+	fail "the wheel at the end: top $(mstate top), $(mstate matches) matches, $(mstate visible) visible"
+n=$(mrun_draws)
+do_input wheel 1
+[ "$(mrun_draws)" = "$n" ] || fail "a turn past the end drew"
+echo "ok: the wheel stops at the end"
+mrun_quit
+
+# Losing the keyboard stops a key that is repeating.
+XCOMPOSEFILE=$SMOKE_DIR/Compose mrun_start
+type_text qxqxqxqx
+mrun_sync || fail "a long line: mrun ended"
+do_input press BackSpace
+wait_for "a held Backspace repeats" eval '[ "$(len)" -lt 240 ]'
+second_mrun
+n=$(len)
+for ((i = 0; i < 15; i++)); do
+	[ "$(len)" = "$n" ] || fail "without the keyboard Backspace still took $((n - $(len)))"
+	sleep 0.1
+done
+do_input lift BackSpace
+second_mrun_end
+echo "ok: losing the keyboard stops a repeating key"
+mrun_quit
+
+# A click, a new list, a click on the same row: two clicks on two programs.
+mrun_start
+type_text al
+do_input move $((CX + 100)) $((CY + ROW0 + ROWH / 2))
+do_input click left
+do_input key ctrl+u
+type_text b
+do_input click left
+still_open "two clicks on one row of two lists are no double click"
+mrun_quit
+
+# Two clicks on one row, slower than a double click.
+mrun_start
+type_text al
+do_input move $((CX + 100)) $((CY + ROW0 + ROWH + ROWH / 2))
+do_input click left
+mrun_sync || fail "a slow double click: mrun ended"
+sleep 0.5       # the time between the clicks is what is tested
+do_input click left
+still_open "two slow clicks are no double click"
+expect_state "and choose" sel 1
+# Nor other buttons.
+for b in right middle; do
+	do_input move $((CX + 100)) $((CY + ROW0 + ROWH / 2))
+	do_input click "$b"
+	do_input click "$b"
+done
+still_open "right and middle double clicks run nothing"
+expect_state "and choose nothing" sel 1
+mrun_quit
+
+# The keys keep the chosen row in view.
+mrun_start
+do_input key Up
+mrun_sync || fail "Up: mrun ended"
+[ "$(mstate top)" = $(($(mstate matches) - $(mstate visible))) ] ||
+	fail "Up to the last: top $(mstate top), $(mstate matches) matches, $(mstate visible) visible"
+echo "ok: Up to the last shows it"
+mrun_quit
+mrun_start
+do_input key Down
+mrun_sync || fail "Down: mrun ended"
+for ((i = 0; i < $(mstate visible); i++)); do do_input key Down; done
+expect_state "Down past the rows shown scrolls by one" top 1
+
+# Typing clears an error.
+do_input key ctrl+u
+type_text nosuch
+do_input key Return
+expect_state "an error in the status line" status 'not in $PATH: nosuch'
+do_input key BackSpace
+expect_state "goes with the next key" status ""
+mrun_quit
+
+# Closed by the compositor.
+mrun_start
+do_input key alt+F4
+mrun_exits "closed by mwc"
+echo "ok: closed by mwc"
+
+# Maximized it shows more rows, and back it has its size again.
+mrun_start
+refresh
+SIZE="$(get mrun w) $(get mrun h)"
+mrun_sync || fail "maximize: mrun ended"
+ROWS=$(mstate visible)
+do_input key alt+F10
+check "maximized" '[ "$(get mrun max)" = 1 ]'
+mrun_sync || fail "maximized: mrun ended"
+[ "$(mstate visible)" -gt "$ROWS" ] || fail "maximized it shows $(mstate visible) rows, not more than $ROWS"
+do_input key alt+F10
+check "and back to its size" '[ "$(get mrun w) $(get mrun h)" = "$SIZE" ]'
+expect_state "and its rows" visible "$ROWS"
+mrun_quit
+
+# A name that starts right to left is drawn from the left, as the others.
+H=$SMOKE_DIR/bin-h
+mkdir -p "$H"
+program "$H" "שלום" shalom
+mrun_start "$H"
+do_input key Down
+mrun_draws >/dev/null
+pixel_is "the right to left name is chosen" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) "$SEL"
+black=$(build/pngtool count "$SMOKE_DIR/shot.png" $((CX + 12)) $((CY + ROW0 + 2)) 60 $((ROWH - 4)) 000000)
+[ "$black" -gt 0 ] || fail "nothing of the right to left name at the left of its row"
+echo "ok: a right to left name is drawn from the left"
 mrun_quit
 
 # Keys and wheel turns that change nothing draw nothing.
@@ -728,6 +889,26 @@ do_input key Return
 still_open "with stderr closed it stays connected"
 expect_state "and says why" status "cannot start: No such file or directory"
 mrun_quit
+
+# With stderr a pipe nobody reads, the child's error still comes back.
+program "$A" gone
+mrun_start "$PROGS" . brokenstderr
+rm "$A/gone"
+type_text gone
+do_input key Return
+still_open "with stderr a broken pipe it stays open"
+expect_state "and says why" status "cannot start: No such file or directory"
+mrun_quit
+
+# MRUN_TEST_STATE set but empty is not set.
+mkdir -p "$SMOKE_DIR/nostate"
+(cd "$SMOKE_DIR/nostate" && PATH=$PROGS WAYLAND_DISPLAY=wayland-0 MRUN_TEST_STATE= \
+	exec "$MRUN") >>"$MRUN_LOG" 2>&1 &
+MRUN_PID=$!
+check "mrun with an empty MRUN_TEST_STATE" '[ "$(get mrun kbfocus)" = 1 ]'
+mrun_quit
+[ -z "$(ls -A "$SMOKE_DIR/nostate")" ] || fail "an empty MRUN_TEST_STATE wrote $(ls -A "$SMOKE_DIR/nostate")"
+echo "ok: an empty MRUN_TEST_STATE writes nothing"
 
 # A socket that is no compositor: it closes the connection at once.
 python3 -c 'import socket, sys
@@ -785,18 +966,47 @@ MWC_ACTIVE='rgb:-1/0/0' mrun_start
 type_text al
 pixel_is "rgb: with a sign is no colour" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) "$SEL"
 mrun_quit
+for c in rgb:0/c/0=00cc00 rgb:0/ffff/0=00ff00 rgb:00/80/0=008000; do
+	MWC_ACTIVE=${c%=*} mrun_start
+	type_text al
+	pixel_is "${c%=*}" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) "${c#*=}"
+	mrun_quit
+done
+
+# MRUN_FONT: a bigger one shows fewer rows; one without a size gets 10 points.
+mrun_start
+mrun_sync || fail "the default font: mrun ended"
+ROWS=$(mstate visible)
+mrun_quit
+MRUN_FONT='Sans 20' mrun_start
+mrun_sync || fail "MRUN_FONT: mrun ended"
+[ "$(mstate visible)" -lt "$ROWS" ] || fail "MRUN_FONT 'Sans 20' shows $(mstate visible) rows, $ROWS with the default"
+echo "ok: a bigger MRUN_FONT shows fewer rows"
+mrun_quit
+MRUN_FONT=Sans mrun_start
+expect_state "MRUN_FONT without a size is 10 points" visible "$ROWS"
+mrun_quit
 
 # From mwmrc, and the last line that says it; the rest of a line too long to read
 # in one isn't a line of its own.
 mkdir -p "$XDG_CONFIG_HOME/mwc"
 {
+	echo 'Mwm*activeBackground: #0000c0'
+	echo 'Mwm*background: #806040'
 	echo 'Mwm*activeBackground: #00c000'
 	printf 'Mwm*title: %0500d' 0   # 511 bytes, as much as mrun reads at once
 	echo 'Mwm*activeBackground: #c00000'
 } >"$XDG_CONFIG_HOME/mwc/mwmrc"
 mrun_start
 type_text al
-pixel_is "Mwm*activeBackground" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) 00c000
+pixel_is "Mwm*activeBackground, the last line" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) 00c000
+pixel_is "Mwm*background" $((CX + 1)) $((CY + 1)) 806040
+mrun_quit
+# The environment goes before it.
+MWC_ACTIVE='#c0c000' MWC_INACTIVE='#405060' mrun_start
+type_text al
+pixel_is "MWC_ACTIVE before mwmrc" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) c0c000
+pixel_is "MWC_INACTIVE before mwmrc" $((CX + 1)) $((CY + 1)) 405060
 mrun_quit
 
 # Mwm*foreground is the text, as in mwc: on the chosen row and the others alike.

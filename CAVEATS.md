@@ -5,8 +5,9 @@ Limits of mrun that are known and left as they are.
 
 ## Starting programs
 
-A line with a blank goes to the shell, and mrun quits right after starting it. Whether
-the command really started, mrun can't see.
+A line with a blank goes to the shell, and so does a path with characters the shell
+reads, such as `~` or `$`. mrun quits right after starting the shell; whether the
+command really started, mrun can't see.
 
 The list is read once at the start; a program installed while mrun is open is not in
 it.
@@ -16,6 +17,16 @@ Entries in `$PATH` that are not absolute don't count, except for the shell, whic
 
 Names that are not valid UTF-8 or contain control characters are not listed. With a
 path and a blank they can still be started through the shell.
+
+A directory in `$PATH` that can be searched but not read, such as one with mode 0711,
+can't be listed, so its programs aren't offered. The shell still finds them on a line
+with a blank.
+
+
+## Keys
+
+Ctrl+U, Ctrl+Q and Ctrl+W go by the keysym of the active layout: with a layout such
+as Russian active they do nothing. Esc always quits.
 
 
 ## Drawing
