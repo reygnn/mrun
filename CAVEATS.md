@@ -23,11 +23,6 @@ can't be listed, so its programs aren't offered. The shell still finds them on a
 with a blank.
 
 
-## Keys
-
-Ctrl+U, Ctrl+Q and Ctrl+W go by the keysym of the active layout: with a layout such
-as Russian active they do nothing. Esc always quits.
-
 
 ## Drawing
 

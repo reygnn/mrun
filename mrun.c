@@ -978,12 +978,23 @@ static void move_cur(size_t to)
 	cur = to;
 }
 
-static void key(xkb_keysym_t ks, const char *txt, int n)
+/* For a shortcut: in a layout without Latin letters, such as Russian, Ctrl+U is the
+ * key that is U in the first layout, as GTK and Qt read it. */
+static xkb_keysym_t latin_sym(uint32_t kc, xkb_keysym_t ks)
+{
+	const xkb_keysym_t *syms;
+	if (ks <= 0xff ||
+	    xkb_keymap_key_get_syms_by_level(kb_map, kc, 0, 0, &syms) < 1)
+		return ks;
+	return syms[0];
+}
+
+static void key(uint32_t kc, xkb_keysym_t ks, const char *txt, int n)
 {
 	if (mod_on(XKB_MOD_NAME_ALT) || mod_on(XKB_MOD_NAME_LOGO))
 		return;
 	if (mod_on(XKB_MOD_NAME_CTRL)) {
-		switch (ks) {
+		switch (latin_sym(kc, ks)) {
 		case XKB_KEY_q: case XKB_KEY_Q: case XKB_KEY_w: case XKB_KEY_W:
 			exit(0);
 		case XKB_KEY_u: case XKB_KEY_U:
@@ -1104,7 +1115,7 @@ static void key_press(uint32_t kc)
 		n = xkb_state_key_get_utf8(kb_state, kc, txt, sizeof txt);
 	if (n >= (int)sizeof txt)
 		n = 0;
-	key(ks, txt, n);
+	key(kc, ks, txt, n);
 }
 
 static void kb_keymap(void *data, struct wl_keyboard *k, uint32_t format,

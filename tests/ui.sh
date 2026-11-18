@@ -219,7 +219,7 @@ trap 'WAYLAND_DISPLAY=wayland-0 grim "$MRUN_DIR/build/ui-last.png" 2>/dev/null; 
 
 start_mwc 'touch "$SMOKE_DIR/up"; exec sleep 600'
 wait_for "mwc is up" test -e "$SMOKE_DIR/up"
-start_vinput
+start_vinput 1280 720 us,ru     # a second layout without Latin letters
 refresh
 B=$(global theme border)
 T=$(global theme title)
@@ -938,6 +938,19 @@ mrun_start
 do_input key ctrl+w
 mrun_exits "Ctrl+W"
 echo "ok: Ctrl+Q and Ctrl+W end it"
+
+# In a layout without Latin letters the shortcuts are the keys of the first one.
+mrun_start
+type_text beta
+do_input group 1
+do_input key u
+expect_state "the second layout types Cyrillic" line "betaг"
+do_input key ctrl+u
+expect_state "Ctrl+U clears in it" line ""
+do_input key ctrl+q
+mrun_exits "Ctrl+Q in it"
+do_input group 0
+echo "ok: Ctrl+U and Ctrl+Q in a layout without Latin letters"
 
 # What it starts goes on without it, in a session of its own, without its input.
 mrun_start
