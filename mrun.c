@@ -67,7 +67,8 @@ static int *matches;            /* indexes into progs, best first */
 static int nmatches;
 static int sel = -1, top;       /* chosen and first shown of the matches */
 static char line[4096];
-static size_t cur;              /* byte offset of the text cursor */
+/* The line as mtk edits it: its cursor by graphemes. */
+static struct mtk_field field = { .text = line, .size = sizeof line };
 static char status_msg[256];
 static uint32_t last_click_ms;
 static int last_click_row = -1;
@@ -457,7 +458,7 @@ static int take_chosen(void)
 		line[nl] = ' ';
 		line[nl + 1] = 0;
 	}
-	cur = nl + 1;
+	field.cur = nl + 1;
 	update_matches();
 	return 1;
 }
@@ -545,27 +546,15 @@ static void layout(void)
 	r_list = (struct rect){ PAD, y0, W - 2 * PAD, r_status.y - 4 - y0 };
 }
 
-/* The line with its text cursor, shifted left if the end doesn't fit. */
+/* The line with its text cursor, scrolled to it, "..." where it doesn't fit. */
 static void draw_input(void)
 {
 	int fx = r_input.x + BEV, fy = r_input.y + BEV;
 	int fw = r_input.w - 2 * BEV, fh = r_input.h - 2 * BEV;
 	fill(px_paper, fx, fy, fw, fh);
 	bevel(r_input, 0);
-	PangoRectangle pos;
-	pango_layout_set_text(plo, line, -1);
-	pango_layout_index_to_pos(plo, (int)cur, &pos);
-	int cx = PANGO_PIXELS(pos.x), room = fw - 8;
-	int x = fx + 4 - MAX(cx + 1 - room, 0);
-	int base = r_input.y + (r_input.h - (font_asc + font_desc)) / 2 + font_asc;
-	cairo_save(cr);
-	cairo_rectangle(cr, fx, fy, fw, fh);
-	cairo_clip(cr);
-	set_rgb(0x000000);
-	cairo_move_to(cr, x, base - pango_layout_get_baseline(plo) / PANGO_SCALE);
-	pango_cairo_show_layout(cr, plo);
-	fill(0x000000, x + cx, fy + 2, 1, fh - 4);
-	cairo_restore(cr);
+	mtk_field_draw(cr, plo, line, field.cur, 0, fx + 4, fy, fw - 8, fh, 0x000000,
+		px_sel, xc_sel);
 }
 
 static void paint(struct mtk_window *w, cairo_t *c, int width, int height, void *data)
@@ -623,29 +612,6 @@ static void paint(struct mtk_window *w, cairo_t *c, int width, int height, void 
 
 /* ---- input -------------------------------------------------------------- */
 
-static size_t prev_char(size_t at)
-{
-	while (at > 0 && ((unsigned char)line[--at] & 0xc0) == 0x80)
-		;
-	return at;
-}
-
-static size_t next_char(size_t at)
-{
-	if (line[at])
-		at++;
-	while (((unsigned char)line[at] & 0xc0) == 0x80)
-		at++;
-	return at;
-}
-
-static void delete_range(size_t from, size_t to)
-{
-	memmove(line + from, line + to, strlen(line + to) + 1);
-	cur = from;
-	update_matches();
-}
-
 static void move_sel(int d)
 {
 	if (!nmatches)
@@ -657,19 +623,10 @@ static void move_sel(int d)
 		redraw();
 }
 
-/* A held key at the end of the line would repaint for nothing. */
-static void move_cur(size_t to)
-{
-	if (to != cur)
-		redraw();
-	cur = to;
-}
-
 static void key(struct mtk_window *w, const struct mtk_key *k, void *data)
 {
 	xkb_keysym_t ks = k->sym;
 	const char *txt = k->utf8;
-	int n = (int)strlen(txt);
 	if (k->mods & (MTK_MOD_ALT | MTK_MOD_LOGO))
 		return;
 	if (k->mods & MTK_MOD_CTRL) {
@@ -677,8 +634,7 @@ static void key(struct mtk_window *w, const struct mtk_key *k, void *data)
 		case XKB_KEY_q: case XKB_KEY_Q: case XKB_KEY_w: case XKB_KEY_W:
 			exit(0);
 		case XKB_KEY_u: case XKB_KEY_U:
-			line[0] = 0;
-			cur = 0;
+			mtk_field_key(&field, k->latin, "", MTK_MOD_CTRL);
 			update_matches();
 			break;
 		}
@@ -708,34 +664,16 @@ static void key(struct mtk_window *w, const struct mtk_key *k, void *data)
 	case XKB_KEY_Next: case XKB_KEY_KP_Next:
 		move_sel(rows_vis());
 		return;
-	case XKB_KEY_Left: case XKB_KEY_KP_Left:
-		move_cur(prev_char(cur));
-		return;
-	case XKB_KEY_Right: case XKB_KEY_KP_Right:
-		move_cur(next_char(cur));
-		return;
-	case XKB_KEY_Home: case XKB_KEY_KP_Home:
-		move_cur(0);
-		return;
-	case XKB_KEY_End: case XKB_KEY_KP_End:
-		move_cur(strlen(line));
-		return;
-	case XKB_KEY_BackSpace:
-		if (cur)
-			delete_range(prev_char(cur), cur);
-		return;
-	case XKB_KEY_Delete: case XKB_KEY_KP_Delete:
-		if (line[cur])
-			delete_range(cur, next_char(cur));
-		return;
 	}
-	if (n <= 0 || (unsigned char)txt[0] < 0x20 || txt[0] == 0x7f ||
-	    strlen(line) + (size_t)n >= sizeof line)
-		return;
-	memmove(line + cur + n, line + cur, strlen(line + cur) + 1);
-	memcpy(line + cur, txt, n);
-	cur += n;
-	update_matches();
+	/* The rest edits the line; a held key at its end repaints nothing. */
+	switch (mtk_field_key(&field, ks, txt, k->mods)) {
+	case MTK_FIELD_CHANGED:
+		update_matches();
+		break;
+	case MTK_FIELD_MOVED:
+		redraw();
+		break;
+	}
 }
 
 /* A held key moves and types, but runs and takes nothing again. */
