@@ -1,0 +1,5 @@
+TODO
+
+- `make check`: unit tests of the logic without Wayland, under ASan and UBSan, as
+  digitalClock and pulseControl have them; logic worth testing moved out of the
+  display code first.
