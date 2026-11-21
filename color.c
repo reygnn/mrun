@@ -85,6 +85,21 @@ uint32_t mtk_readable(uint32_t bg, uint32_t c, uint32_t to)
 	return to;
 }
 
+uint32_t mtk_apart(uint32_t bg, uint32_t c, float ratio)
+{
+	if (mtk_contrast_ratio(bg, c) >= ratio)
+		return c;
+	for (int k = 1; k <= 20; k++) {
+		uint32_t dark = mtk_mix(c, 0x000000, k / 20.0f);
+		uint32_t light = mtk_mix(c, 0xffffff, k / 20.0f);
+		float d = mtk_contrast_ratio(bg, dark), l = mtk_contrast_ratio(bg, light);
+		if (d >= ratio || l >= ratio)
+			return d >= l ? dark : light;
+	}
+	return mtk_contrast_ratio(bg, 0x000000) >= mtk_contrast_ratio(bg, 0xffffff) ?
+		0x000000 : 0xffffff;
+}
+
 /* As mwc's config_color() and rgb_of(): a float of the channel, rounded to 16
  * bits. */
 static uint16_t channel16(float v)

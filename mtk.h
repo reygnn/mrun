@@ -17,7 +17,7 @@
 #include <xkbcommon/xkbcommon.h>
 #include <xkbcommon/xkbcommon-compose.h>
 
-#define MTK_VERSION "0.10.0"
+#define MTK_VERSION "0.11.0"
 
 /* ---- colours (color.c) ---------------------------------------------------- */
 
@@ -53,6 +53,16 @@ uint32_t mtk_dimmed(uint32_t bg, uint32_t fg);
  * needs; to itself if even that falls short. */
 uint32_t mtk_readable(uint32_t bg, uint32_t c, uint32_t to);
 
+/* c moved towards black or white, a twentieth at a time, until it has ratio on bg;
+ * the direction that gets there first, at a tie the one with more. c itself if it
+ * has it already; black or white, whichever has more, if neither gets there. For a
+ * face that must stand out on another: a selection on a list. */
+uint32_t mtk_apart(uint32_t bg, uint32_t c, float ratio);
+
+/* A selected row on a list: 2:1, about what Motif's blue #7387ad has on a light grey
+ * list. WCAG asks 3:1 of a control's boundary; the row's text has its 4.5:1. */
+#define MTK_SELECT_CONTRAST 2.0f
+
 /* What mwc reads: "#rrggbb", names like "gold", and rgb:r/g/b with 1 to 4 hex
  * digits per channel. 0 for NULL, "" and anything else; *out is then untouched.
  * The colour as the screen shows it and mwc hands it to Motif's rules: each
@@ -79,12 +89,22 @@ char *mtk_mwmrc_client_get(const char *app, const char *key, char *val, size_t n
  * frames: has_fg is 0. */
 struct mtk_theme {
 	struct mtk_shade inactive, active;
+	/* A list, inactive.bg 30 % towards white, and a row selected on it, active.bg
+	 * moved to MTK_SELECT_CONTRAST on the list where it is closer (mtk_apart()).
+	 * Their text has 4.5:1: the chosen text (set, the palette's, the built-in
+	 * grey's black) as far as it reads, else black or white; on select active.fg
+	 * as far as it reads. Clients' own faces: mwc draws no list. */
+	struct mtk_shade list, select;
 	int has_fg, has_active_fg;      /* the user set the text colour */
 	int palette;                    /* Mwm*basicBackground is set */
 	uint32_t dim;                   /* mtk_dimmed() on inactive */
 };
 
 void mtk_theme_load(struct mtk_theme *t);
+
+/* list and select from inactive, active, has_fg and palette, as mtk_theme_load()
+ * sets them: for a theme a client makes of its own, in its tests. */
+void mtk_theme_lists(struct mtk_theme *t);
 
 /* ---- drawing (draw.c) ------------------------------------------------------ */
 
