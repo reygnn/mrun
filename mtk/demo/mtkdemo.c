@@ -12,7 +12,8 @@
  *                        as a client with another library's loop has it
  *
  * Keys: text into the field, BackSpace, Esc or Ctrl+Q quits. SIGUSR1 counts
- * through a pipe the loop watches.
+ * through a pipe the loop watches. The right button opens a menu of two items:
+ * click one, or Up / Down and Return; Esc or a click outside closes it.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -41,6 +42,10 @@ static int steps, pressed, press_x, press_y, focused, scale = 1;
 static const char *state_path;
 static int sig_pipe[2] = { -1, -1 };
 static int done;                /* asked to quit, for the own loop */
+static struct mtk_window *menu; /* the popup, while it is up */
+static int menu_hot = -1, choice, press_buttons, press_mods;
+#define MENU_W 120
+#define ITEM_H 24
 
 static void state_write(void)
 {
@@ -52,9 +57,10 @@ static void state_write(void)
 	mtk_window_size(win, &w, &h);
 	snprintf(now, sizeof now, "focus %d\nscale %d\nsize %dx%d\npaints %u\nkeys %u\n"
 		"repeats %u\nclicks %u\npress %d %d\nscrolls %u\nsteps %d\nsignals %u\n"
-		"ticks %u\ndirty %d\ncursors %u\ntext %s\n", focused, scale, w, h,
-		mtk_window_paints(win), keys, repeats, clicks, press_x, press_y, scrolls, steps,
-		signals, ticks, mtk_window_dirty(win), mtk_cursor_loads(m), text);
+		"ticks %u\ndirty %d\ncursors %u\npopup %d\nchoice %d\nbuttons %d\nmods %d\n"
+		"text %s\n", focused, scale, w, h, mtk_window_paints(win), keys, repeats,
+		clicks, press_x, press_y, scrolls, steps, signals, ticks, mtk_window_dirty(win),
+		mtk_cursor_loads(m), menu != NULL, choice, press_buttons, press_mods, text);
 	if (!strcmp(now, last) ||
 	    (size_t)snprintf(tmp, sizeof tmp, "%s.tmp", state_path) >= sizeof tmp)
 		return;
@@ -110,6 +116,85 @@ static void paint(struct mtk_window *w, cairo_t *cr, int ww, int wh, void *data)
 	cairo_restore(cr);
 }
 
+/* ---- the menu ---- */
+
+static void menu_close(void)
+{
+	if (menu)
+		mtk_window_destroy(menu);
+	menu = NULL;
+	menu_hot = -1;
+}
+
+static void menu_paint(struct mtk_window *w, cairo_t *cr, int ww, int wh, void *data)
+{
+	static const char *const item[] = { "One", "Two" };
+	mtk_fill(cr, theme.inactive.bg, 0, 0, ww, wh);
+	mtk_shadow(cr, 0, 0, ww, wh, MTK_BEVEL, &theme.inactive, 0);
+	for (int i = 0; i < 2; i++) {
+		int y = MTK_BEVEL + i * ITEM_H;
+		uint32_t fg = theme.inactive.fg;
+		if (i == menu_hot) {
+			mtk_fill(cr, theme.active.bg, MTK_BEVEL, y, ww - 2 * MTK_BEVEL, ITEM_H);
+			fg = theme.active.fg;
+		}
+		mtk_text(cr, lo, item[i], fg, MTK_BEVEL + 8, y + 4);
+	}
+}
+
+static int menu_item_at(double x, double y)
+{
+	int i = (int)(y - MTK_BEVEL) / ITEM_H;
+	return x >= 0 && x < MENU_W && y >= MTK_BEVEL && i < 2 ? i : -1;
+}
+
+static void menu_take(int i)
+{
+	if (i < 0)
+		return;
+	choice = i + 1;
+	menu_close();
+}
+
+static void menu_pointer(struct mtk_window *w, const struct mtk_pointer *p, void *data)
+{
+	int at = menu_item_at(p->x, p->y);
+	if (p->kind == MTK_MOTION || p->kind == MTK_ENTER) {
+		if (at != menu_hot) {
+			menu_hot = at;
+			mtk_window_redraw(w);
+		}
+	} else if (p->kind == MTK_RELEASE && p->button == BTN_LEFT) {
+		menu_take(at);
+	}
+}
+
+static void menu_key(struct mtk_window *w, const struct mtk_key *k, void *data)
+{
+	if (k->sym == XKB_KEY_Escape) {
+		menu_close();
+	} else if (k->sym == XKB_KEY_Down || k->sym == XKB_KEY_Up) {
+		menu_hot = k->sym == XKB_KEY_Down ? (menu_hot + 1) % 2 :
+			menu_hot <= 0 ? 1 : menu_hot - 1;
+		mtk_window_redraw(w);
+	} else if (k->sym == XKB_KEY_Return) {
+		menu_take(menu_hot);
+	}
+}
+
+/* A click on another client: the compositor ends it. */
+static void menu_done(struct mtk_window *w, void *data)
+{
+	menu_close();
+}
+
+static const struct mtk_window_listener menu_listener = {
+	.paint = menu_paint,
+	.pointer = menu_pointer,
+	.key = menu_key,
+	.close = menu_done,
+};
+
 static void focus(struct mtk_window *w, int in, void *data)
 {
 	focused = in;
@@ -156,9 +241,24 @@ static void pointer(struct mtk_window *w, const struct mtk_pointer *p, void *dat
 		mtk_window_set_cursor(w, inside(p->x, p->y, x, y, bw, bh) ? "text" : NULL);
 		break;
 	case MTK_PRESS:
+		/* With the menu up a click on our own window is ours to close it. */
+		if (menu) {
+			menu_close();
+			break;
+		}
 		button_rect(&x, &y, &bw, &bh);
 		press_x = (int)p->x;
 		press_y = (int)p->y;
+		press_buttons = (int)p->buttons;
+		press_mods = (int)p->mods;
+		if (p->button == BTN_RIGHT) {
+			menu = mtk_popup_new(w, &(struct mtk_popup_config){
+				.x = press_x, .y = press_y, .width = MENU_W,
+				.height = 2 * ITEM_H + 2 * MTK_BEVEL, .grab = 1,
+				.serial = p->serial,
+			}, &menu_listener, NULL);
+			break;
+		}
 		if (p->button == BTN_LEFT && inside(p->x, p->y, x, y, bw, bh)) {
 			pressed = 1;
 			mtk_window_redraw(w);

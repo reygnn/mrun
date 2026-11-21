@@ -5,7 +5,9 @@ Limits of mtk that are known and left as they are.
 
 ## Windows
 
-Toplevels only, no popups yet: mfm's menu keeps its own xdg_popup.
+Popups open at a point of their parent, below and right of it, flipped or slid by
+the compositor to stay on the screen; other placements are not offered. Their size
+is fixed when they open.
 
 Buffers are XRGB8888, so a window is opaque.
 
@@ -23,6 +25,10 @@ with 1: the clients have nothing to save.
 ## Input
 
 One seat at a time: the oldest announced, the next one when it goes.
+
+When the keyboard leaves, the modifiers held are forgotten, and when the pointer
+goes, its window hears a leave. mwc sends the keyboard's state with every enter and
+releases held buttons first, so its tests cannot show either.
 
 The cursor is loaded from the theme at its size times the scale, the theme's nearest
 size. When that size is no multiple of the scale, a viewport shows it at its size

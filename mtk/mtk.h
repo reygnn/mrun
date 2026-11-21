@@ -17,7 +17,7 @@
 #include <xkbcommon/xkbcommon.h>
 #include <xkbcommon/xkbcommon-compose.h>
 
-#define MTK_VERSION "0.5.0"
+#define MTK_VERSION "0.6.0"
 
 /* ---- colours (color.c) ---------------------------------------------------- */
 
@@ -97,6 +97,14 @@ void mtk_bevel(cairo_t *cr, int x, int y, int w, int h, int t, uint32_t tl,
 void mtk_shadow(cairo_t *cr, int x, int y, int w, int h, int t,
 	const struct mtk_shade *s, int in);
 
+/* The rows of a buffer that differ from the one shown before it, both h rows of
+ * stride bytes, as at most max runs in rows[i][0] (first row) and rows[i][1] (how
+ * many): a gap of up to gap rows is not worth a run of its own, and the last run
+ * takes in the rest. 0 if nothing changed. For wl_surface.damage_buffer, so the
+ * compositor copies and composites only those. */
+int mtk_damage_rows(const void *now, const void *was, size_t stride, int h, int gap,
+	int max, int rows[][2]);
+
 /* A groove of two lines, dark then light: across from y, down from x. */
 void mtk_groove_h(cairo_t *cr, int x, int y, int w, const struct mtk_shade *s);
 void mtk_groove_v(cairo_t *cr, int x, int y, int h, const struct mtk_shade *s);
@@ -149,8 +157,9 @@ int mtk_buffer_scale(int factor);
 #define MTK_CAIRO_MAX 32767
 
 /* The scale to draw a window of w x h surface pixels at, for the buffer scale s:
- * the largest up to s whose buffer Cairo can draw, so that a huge window is drawn
- * at a lower scale and enlarged by the compositor. At least 1. */
+ * the largest up to s whose buffer Cairo can draw and a wl_shm pool, below 2 GiB,
+ * can hold, so that a huge window is drawn at a lower scale and enlarged by the
+ * compositor. At least 1. */
 int mtk_draw_scale(int w, int h, int s);
 
 /* The seats the compositor has announced and not removed, oldest first: one is
@@ -186,9 +195,11 @@ struct xkb_compose_state *mtk_compose_new(struct xkb_context *ctx);
 int mtk_key_translate(struct xkb_state *st, struct xkb_compose_state *compose,
 	uint32_t kc, xkb_keysym_t *sym, char utf8[64]);
 
-/* For a shortcut: in a layout without Latin letters, such as Russian, the key that
- * is ks in the first layout of map that has a Latin one there, as Qt reads it; ks
- * itself where it is Latin already or no layout has one. */
+/* For a shortcut, the key as it is in the first layout of map that gives a Latin
+ * letter or a digit there, as Qt and mfm read it: in Russian, Ctrl+U is the key that
+ * is U in a Latin layout. A digit counts on its level with Shift too: AZERTY has "&"
+ * there without it, and Ctrl+1 would never come. Else ks, or for a key past Latin-1
+ * the first printable ASCII any layout has on it. */
 xkb_keysym_t mtk_latin_sym(struct xkb_keymap *map, uint32_t kc, xkb_keysym_t ks);
 
 /* Key repeat, by the compositor's rate (keys a second, 0 for none) and delay
@@ -297,6 +308,10 @@ struct mtk_key {
 	int repeat;             /* not pressed but repeated */
 };
 
+#define MTK_BUTTON_LEFT 1u
+#define MTK_BUTTON_MIDDLE 2u
+#define MTK_BUTTON_RIGHT 4u
+
 enum mtk_pointer_kind {
 	MTK_ENTER, MTK_LEAVE, MTK_MOTION, MTK_PRESS, MTK_RELEASE, MTK_SCROLL,
 };
@@ -310,6 +325,7 @@ struct mtk_pointer {
 	uint32_t button;        /* BTN_LEFT and so on */
 	uint32_t serial, time;
 	unsigned mods;
+	unsigned buttons;       /* MTK_BUTTON_* held before this event */
 	int steps_x, steps_y;
 	double dx, dy;
 };
@@ -364,7 +380,27 @@ struct mtk_window_config {
 
 struct mtk_window *mtk_window_new(struct mtk *m, const struct mtk_window_config *c,
 	const struct mtk_window_listener *l, void *data);
+/* Also the popups it has. */
 void mtk_window_destroy(struct mtk_window *w);
+
+/* A popup of parent, as a menu: width x height, below and right of x, y in the
+ * parent's surface pixels, else flipped or slid to stay on the screen. With grab,
+ * the serial of the press that opens it (mtk_pointer.serial), it takes the
+ * keyboard and the pointer while it is up: the keys go to it whichever window the
+ * compositor gives them, and the compositor still sends what happens over the
+ * client's other windows to them. The compositor may end it, as on a click
+ * on another client: then close, else it is destroyed. */
+struct mtk_popup_config {
+	int x, y, width, height;
+	int grab;
+	uint32_t serial;
+};
+
+struct mtk_window *mtk_popup_new(struct mtk_window *parent,
+	const struct mtk_popup_config *c, const struct mtk_window_listener *l,
+	void *data);
+/* Where the compositor put it, in its parent's surface pixels. */
+void mtk_popup_position(const struct mtk_window *popup, int *x, int *y);
 
 /* Paint again, at the next frame. */
 void mtk_window_redraw(struct mtk_window *w);
@@ -382,6 +418,7 @@ int mtk_window_scale(const struct mtk_window *w);
 int mtk_window_focused(const struct mtk_window *w);
 struct mtk *mtk_window_mtk(const struct mtk_window *w);
 struct wl_surface *mtk_window_surface(const struct mtk_window *w);
+/* NULL for a popup. */
 struct xdg_toplevel *mtk_window_toplevel(const struct mtk_window *w);
 /* For tests: how often it has painted, and whether a paint is due. */
 unsigned mtk_window_paints(const struct mtk_window *w);
