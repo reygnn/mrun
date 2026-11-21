@@ -25,7 +25,8 @@ export HOME=$SMOKE_DIR/home
 unset MWC_INACTIVE MWC_ACTIVE MRUN_FONT
 mkdir -p "$HOME"
 : >"$MRUN_LOG"
-SEL=c6c1aa      # mwc's default activeBackground, IRIX Base
+SEL=8b8777      # mwc's default activeBackground #c6c1aa, IRIX Base, moved by mtk
+		# from 1.04:1 to 2:1 on the list #c4c4c4
 TOP=dadada      # the default background's light shadow, Motif 2.3.8's as mwc's
 MARKS=$SMOKE_DIR/marks
 A=$SMOKE_DIR/bin-a
@@ -995,19 +996,26 @@ echo "ok: it goes on by itself"
 # ---- mwmrc -----------------------------------------------------------------------
 
 # The environment before mwmrc, and only what is a colour: rgb: takes hex digits.
-MWC_ACTIVE='#00c000' MWC_INACTIVE='#806040' mrun_start
+# The active colours here are far enough from their list to be kept as they are.
+MWC_ACTIVE='#004000' MWC_INACTIVE='#806040' mrun_start
 type_text al
-pixel_is "MWC_ACTIVE" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) 00c000
+pixel_is "MWC_ACTIVE" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) 004000
 pixel_is "MWC_INACTIVE" $((CX + 1)) $((CY + 1)) 806040
+mrun_quit
+# One too close to the list is moved apart: #00c000 on #c4c4c4 has 1.41:1.
+MWC_ACTIVE='#00c000' mrun_start
+type_text al
+pixel_is "MWC_ACTIVE moved to 2:1 on the list" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) \
+	009a00
 mrun_quit
 MWC_ACTIVE='rgb:-1/0/0' mrun_start
 type_text al
 pixel_is "rgb: with a sign is no colour" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) "$SEL"
 mrun_quit
+# On the window's face, which is taken as it is.
 for c in rgb:0/c/0=00cc00 rgb:0/ffff/0=00ff00 rgb:00/80/0=008000; do
-	MWC_ACTIVE=${c%=*} mrun_start
-	type_text al
-	pixel_is "${c%=*}" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) "${c#*=}"
+	MWC_INACTIVE=${c%=*} mrun_start
+	pixel_is "${c%=*}" $((CX + 1)) $((CY + 1)) "${c#*=}"
 	mrun_quit
 done
 
@@ -1031,19 +1039,19 @@ mkdir -p "$XDG_CONFIG_HOME/mwc"
 {
 	echo 'Mwm*activeBackground: #0000c0'
 	echo 'Mwm*background: #806040'
-	echo 'Mwm*activeBackground: #00c000'
+	echo 'Mwm*activeBackground: #004000'
 	printf 'Mwm*title: %0500d' 0   # 511 bytes, as much as mrun reads at once
 	echo 'Mwm*activeBackground: #c00000'
 } >"$XDG_CONFIG_HOME/mwc/mwmrc"
 mrun_start
 type_text al
-pixel_is "Mwm*activeBackground, the last line" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) 00c000
+pixel_is "Mwm*activeBackground, the last line" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) 004000
 pixel_is "Mwm*background" $((CX + 1)) $((CY + 1)) 806040
 mrun_quit
 # The environment goes before it.
-MWC_ACTIVE='#c0c000' MWC_INACTIVE='#405060' mrun_start
+MWC_ACTIVE='#e0e000' MWC_INACTIVE='#405060' mrun_start
 type_text al
-pixel_is "MWC_ACTIVE before mwmrc" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) c0c000
+pixel_is "MWC_ACTIVE before mwmrc" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) e0e000
 pixel_is "MWC_INACTIVE before mwmrc" $((CX + 1)) $((CY + 1)) 405060
 mrun_quit
 

@@ -469,18 +469,19 @@ static void theme_init(void)
 {
 	mtk_theme_load(&theme);
 	uint32_t bg = theme.inactive.bg;
-	/* As in mwc: the text is Mwm*foreground where set, on the chosen row too. Else
-	 * the chosen row, which is mwc's armed menu item, as Motif picks it, and the
-	 * list, a face of mrun's own and lighter than bg, black or white by WCAG. */
+	/* The list and the chosen row on it are mtk's, as for all mwc's clients: the
+	 * list lighter than bg, the row mwc's active colour, moved apart to 2:1 where it
+	 * lands too close to the list (Base's #c6c1aa on #c4c4c4). As in mwc the text
+	 * is Mwm*foreground where set, on the chosen row too; else mtk's, which reads. */
 	px_bg = bg;
 	px_top = theme.inactive.top;
 	px_bot = theme.inactive.bot;
-	px_list = mtk_mix(bg, 0xffffff, 0.3f);
+	px_list = theme.list.bg;
 	px_paper = 0xf6f6f6;
-	px_sel = theme.active.bg;
+	px_sel = theme.select.bg;
 	uint32_t fg = theme.inactive.fg;
-	xc_fg = theme.has_fg ? fg : mtk_best_contrast(px_list);
-	xc_sel = theme.has_fg ? fg : mtk_text_color(px_sel);
+	xc_fg = theme.has_fg ? fg : theme.list.fg;
+	xc_sel = theme.has_fg ? fg : theme.select.fg;
 	xc_dim = mtk_mix(bg, fg, 0.6f);
 	/* Light text means a dark theme, where dark red wouldn't read. */
 	xc_err = mtk_best_contrast(fg) == 0x000000 ? 0xffa0a0 : 0x8a0303;

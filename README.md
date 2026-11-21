@@ -75,9 +75,10 @@ and `.dirty` for changes not committed.
 
 The colours are mwc's: `MWC_INACTIVE` and `MWC_ACTIVE` from the environment, else
 `Mwm*background` and `Mwm*activeBackground` from `$XDG_CONFIG_HOME/mwc/mwmrc` (by
-default `~/.config/mwc/mwmrc`), else the Motif defaults. The text is `Mwm*foreground`
-where it is set; else the chosen row's is black or white as Motif picks it, as mwc's
-menus, and the list's, on a face of mrun's own, whichever reads better.
+default `~/.config/mwc/mwmrc`), else the Motif defaults. The list and the chosen row
+are mtk's: the row is the active colour, moved towards black or white where it is too
+close to the list to tell apart (Base's `#c6c1aa` on `#c4c4c4`). The text is
+`Mwm*foreground` where it is set; else it reads on both, at 4.5:1.
 
 
 ## How this is built
