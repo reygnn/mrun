@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <time.h>
+#include <linux/input-event-codes.h>
 #include <unistd.h>
 #include <wayland-client.h>
 #include <wayland-cursor.h>
@@ -46,9 +47,15 @@ struct mtk_window {
 	void *data;
 	struct wl_surface *surface;
 	struct xdg_surface *xdg;
-	struct xdg_toplevel *toplevel;
+	struct xdg_toplevel *toplevel;  /* or, for a popup: */
+	struct xdg_popup *popup;
+	struct mtk_window *parent;
+	int pop_x, pop_y;               /* where the compositor put it */
+	int grab;                       /* the popup took the seat's grab */
 	struct zxdg_toplevel_decoration_v1 *deco;
 	struct shmbuf *bufs[2];
+	struct shmbuf *shown;           /* the last committed, to damage only changes */
+	int shown_scale;
 	struct wl_callback *frame;      /* a frame is on its way */
 	int configured;                 /* the first configure has arrived */
 	int need_commit;                /* a configure waits for its commit */
@@ -108,6 +115,7 @@ struct mtk {
 	struct mtk_window *ptr_win;
 	uint32_t ptr_serial;            /* the last enter's, for set_cursor */
 	double ptr_x, ptr_y;
+	unsigned buttons;               /* MTK_BUTTON_*, held */
 	int axis;                       /* scrolling waits for the frame */
 	struct mtk_scroll scroll_x, scroll_y;
 	double dx, dy;
@@ -224,16 +232,40 @@ static struct shmbuf *get_buffer(struct mtk_window *win, int w, int h)
 		struct shmbuf *b = win->bufs[i];
 		if (!b || (b->w == w && b->h == h))
 			continue;
+		if (win->shown == b)
+			win->shown = NULL;
 		buf_drop(b);
 		win->bufs[i] = NULL;
 	}
+	/* Not the one shown, if the other is free: that keeps what the compositor has,
+	 * to compare the next picture with. */
 	for (int i = 0; i < 2; i++)
-		if (win->bufs[i] && !win->bufs[i]->busy)
+		if (win->bufs[i] && !win->bufs[i]->busy && win->bufs[i] != win->shown)
 			return win->bufs[i];
 	for (int i = 0; i < 2; i++)
 		if (!win->bufs[i])
 			return win->bufs[i] = buf_new(win->m, w, h);
+	for (int i = 0; i < 2; i++)
+		if (win->bufs[i] && !win->bufs[i]->busy)
+			return win->bufs[i];
 	return NULL;
+}
+
+/* b committed, with damage for the rows that differ from what was shown: the
+ * compositor copies and composites only those. */
+static void damage(struct mtk_window *win, struct shmbuf *b, int s)
+{
+	enum { RECTS = 4, GAP = 8 };    /* a gap of a few rows is not worth a rect */
+	const struct shmbuf *o = win->shown;
+	if (!o || o == b || o->w != b->w || o->h != b->h || win->shown_scale != s) {
+		wl_surface_damage_buffer(win->surface, 0, 0, b->w, b->h);
+		return;
+	}
+	int rows[RECTS][2];
+	int n = mtk_damage_rows(b->data, o->data, b->size / b->h, b->h, GAP * s, RECTS,
+		rows);
+	for (int i = 0; i < n; i++)
+		wl_surface_damage_buffer(win->surface, 0, rows[i][0], b->w, rows[i][1]);
 }
 
 static void frame_done(void *data, struct wl_callback *cb, uint32_t time)
@@ -249,7 +281,12 @@ static const struct wl_callback_listener frame_listener = { frame_done };
 static int draw(struct mtk_window *win)
 {
 	int s = mtk_draw_scale(win->w, win->h, win->scale);
-	struct shmbuf *b = get_buffer(win, win->w * s, win->h * s);
+	/* Past what even scale 1 allows the buffer is cut: no output is that large. */
+	int bw = win->w * s > MTK_CAIRO_MAX ? MTK_CAIRO_MAX : win->w * s;
+	int bh = win->h * s > MTK_CAIRO_MAX ? MTK_CAIRO_MAX : win->h * s;
+	if (bh > INT32_MAX / 4 / bw)
+		bh = INT32_MAX / 4 / bw;
+	struct shmbuf *b = get_buffer(win, bw, bh);
 	if (!b)
 		return 0;
 	cairo_t *cr = b->cr;
@@ -266,9 +303,11 @@ static int draw(struct mtk_window *win)
 	wl_callback_add_listener(win->frame, &frame_listener, win);
 	wl_surface_set_buffer_scale(win->surface, s);
 	wl_surface_attach(win->surface, b->wl, 0, 0);
-	wl_surface_damage_buffer(win->surface, 0, 0, b->w, b->h);
+	damage(win, b, s);
 	wl_surface_commit(win->surface);
 	b->busy = 1;
+	win->shown = b;
+	win->shown_scale = s;
 	return 1;
 }
 
@@ -362,6 +401,20 @@ static void cursor_update(struct mtk *m)
 
 /* ---- the keyboard --------------------------------------------------------- */
 
+/* The keys go to the newest popup with the grab over the window that has the
+ * keyboard: a compositor may leave the keyboard with that window, as mwc does. */
+static struct mtk_window *key_target(struct mtk *m)
+{
+	for (struct mtk_window *w = m->windows; w && m->kb_win; w = w->next) {
+		if (!w->grab)
+			continue;
+		for (struct mtk_window *a = w; a; a = a->parent)
+			if (a == m->kb_win)
+				return w;
+	}
+	return m->kb_win;
+}
+
 static int key_make(struct mtk *m, uint32_t kc, int repeat, struct mtk_key *k,
 	char utf8[64])
 {
@@ -441,6 +494,11 @@ static void kb_lost(struct mtk *m)
 	mtk_repeat_stop(&m->repeat);
 	if (m->compose)
 		xkb_compose_state_reset(m->compose);
+	/* What is held now is unknown, and a click can come before the next enter,
+	 * which brings the real state. */
+	if (m->kb_state)
+		xkb_state_update_mask(m->kb_state, 0, 0, 0, 0, 0,
+			xkb_state_serialize_layout(m->kb_state, XKB_STATE_LAYOUT_EFFECTIVE));
 }
 
 static void kb_leave(void *data, struct wl_keyboard *kb, uint32_t serial,
@@ -454,7 +512,7 @@ static void kb_key(void *data, struct wl_keyboard *kb, uint32_t serial,
 {
 	struct mtk *m = data;
 	uint32_t kc = code + 8;
-	struct mtk_window *win = m->kb_win;
+	struct mtk_window *win = key_target(m);
 	m->serial = serial;
 	if (!m->kb_state)
 		return;
@@ -503,7 +561,7 @@ static const struct wl_keyboard_listener keyboard_listener = {
 static void key_repeat(struct mtk *m)
 {
 	uint32_t kc = mtk_repeat_due(&m->repeat, mtk_now());
-	struct mtk_window *win = m->kb_win;
+	struct mtk_window *win = key_target(m);
 	if (!kc || !win || !m->kb_state)
 		return;
 	struct mtk_key k;
@@ -535,6 +593,7 @@ static void ptr_send(struct mtk *m, enum mtk_pointer_kind kind, uint32_t button,
 	struct mtk_pointer p = {
 		.kind = kind, .x = m->ptr_x, .y = m->ptr_y, .button = button,
 		.serial = serial, .time = time, .mods = mtk_mods(m->kb_state),
+		.buttons = m->buttons,
 	};
 	if (kind == MTK_SCROLL) {
 		p.steps_x = mtk_scroll_frame(&m->scroll_x);
@@ -563,6 +622,7 @@ static void ptr_leave(void *data, struct wl_pointer *p, uint32_t serial,
 	struct mtk *m = data;
 	ptr_send(m, MTK_LEAVE, 0, serial, 0);
 	m->ptr_win = NULL;
+	m->buttons = 0;
 	scroll_reset(m);
 }
 
@@ -579,9 +639,13 @@ static void ptr_button(void *data, struct wl_pointer *p, uint32_t serial,
 	uint32_t time, uint32_t button, uint32_t state)
 {
 	struct mtk *m = data;
+	int pressed = state == WL_POINTER_BUTTON_STATE_PRESSED;
+	unsigned bit = button == BTN_LEFT ? MTK_BUTTON_LEFT : button == BTN_MIDDLE ?
+		MTK_BUTTON_MIDDLE : button == BTN_RIGHT ? MTK_BUTTON_RIGHT : 0;
 	m->serial = serial;
-	ptr_send(m, state == WL_POINTER_BUTTON_STATE_PRESSED ? MTK_PRESS : MTK_RELEASE,
-		button, serial, time);
+	ptr_send(m, pressed ? MTK_PRESS : MTK_RELEASE, button, serial, time);
+	/* A press sees the buttons held before it, as with any toolkit. */
+	m->buttons = pressed ? m->buttons | bit : m->buttons & ~bit;
 }
 
 static void ptr_frame(void *data, struct wl_pointer *p)
@@ -655,6 +719,7 @@ static void seat_capabilities(void *data, struct wl_seat *s, uint32_t caps)
 	} else if (!want_ptr && m->pointer) {
 		/* Gone without a leave, perhaps: the window hears of it all the same. */
 		ptr_send(m, MTK_LEAVE, 0, 0, 0);
+		m->buttons = 0;
 		if (wl_pointer_get_version(m->pointer) >= WL_POINTER_RELEASE_SINCE_VERSION)
 			wl_pointer_release(m->pointer);
 		else
@@ -852,7 +917,7 @@ static void xdg_configure(void *data, struct xdg_surface *s, uint32_t serial)
 	struct mtk_window *win = data;
 	xdg_surface_ack_configure(s, serial);
 	win->states = win->cfg_states;
-	if (!win->fixed)
+	if (!win->fixed && win->toplevel)
 		mtk_configure_size(win->cfg_w, win->cfg_h, win->states, win->min_w,
 			win->min_h, &win->free_w, &win->free_h, &win->w, &win->h);
 	if (win->l->configure)
@@ -942,7 +1007,7 @@ static void tell_size(struct mtk_window *win)
 {
 	int min_w = win->fixed ? win->w : win->min_w;
 	int min_h = win->fixed ? win->h : win->min_h;
-	if (min_w == win->sized_w && min_h == win->sized_h)
+	if (!win->toplevel || (min_w == win->sized_w && min_h == win->sized_h))
 		return;
 	win->sized_w = min_w;
 	win->sized_h = min_h;
@@ -993,9 +1058,21 @@ struct mtk_window *mtk_window_new(struct mtk *m, const struct mtk_window_config 
 	return win;
 }
 
+static struct mtk_window *popup_of(struct mtk *m, struct mtk_window *win)
+{
+	for (struct mtk_window *c = m->windows; c; c = c->next)
+		if (c->parent == win)
+			return c;
+	return NULL;
+}
+
 void mtk_window_destroy(struct mtk_window *win)
 {
 	struct mtk *m = win->m;
+	struct mtk_window *c;
+	/* Its popups first: a parent gone before them is a protocol error. */
+	while ((c = popup_of(m, win)))
+		mtk_window_destroy(c);
 	for (struct mtk_window **p = &m->windows; *p; p = &(*p)->next)
 		if (*p == win) {
 			*p = win->next;
@@ -1012,7 +1089,10 @@ void mtk_window_destroy(struct mtk_window *win)
 			buf_drop(win->bufs[i]);
 	if (win->deco)
 		zxdg_toplevel_decoration_v1_destroy(win->deco);
-	xdg_toplevel_destroy(win->toplevel);
+	if (win->toplevel)
+		xdg_toplevel_destroy(win->toplevel);
+	if (win->popup)
+		xdg_popup_destroy(win->popup);
 	xdg_surface_destroy(win->xdg);
 	wl_surface_destroy(win->surface);
 	free(win->cursor);
@@ -1047,7 +1127,84 @@ void mtk_window_set_min_size(struct mtk_window *win, int w, int h)
 
 void mtk_window_set_title(struct mtk_window *win, const char *title)
 {
-	xdg_toplevel_set_title(win->toplevel, title);
+	if (win->toplevel)
+		xdg_toplevel_set_title(win->toplevel, title);
+}
+
+static void popup_configure(void *data, struct xdg_popup *p, int32_t x, int32_t y,
+	int32_t w, int32_t h)
+{
+	struct mtk_window *win = data;
+	win->pop_x = x;
+	win->pop_y = y;
+}
+
+/* A click on another client, or the compositor refused the grab. */
+static void popup_done(void *data, struct xdg_popup *p)
+{
+	struct mtk_window *win = data;
+	if (win->l->close)
+		win->l->close(win, win->data);
+	else
+		mtk_window_destroy(win);
+}
+
+static const struct xdg_popup_listener popup_listener = {
+	.configure = popup_configure,
+	.popup_done = popup_done,
+};
+
+struct mtk_window *mtk_popup_new(struct mtk_window *parent,
+	const struct mtk_popup_config *c, const struct mtk_window_listener *l,
+	void *data)
+{
+	struct mtk *m = parent->m;
+	struct mtk_window *win = calloc(1, sizeof *win);
+	if (!win) {
+		fprintf(stderr, "%s: out of memory\n", m->cfg.name);
+		exit(1);
+	}
+	/* At the parent's scale until the compositor says which. */
+	*win = (struct mtk_window){
+		.m = m, .l = l, .data = data, .parent = parent, .fixed = 1,
+		.scale = parent->scale, .w = c->width > 0 ? c->width : 1,
+		.h = c->height > 0 ? c->height : 1, .pop_x = c->x, .pop_y = c->y,
+	};
+	win->next = m->windows;
+	m->windows = win;
+	win->surface = wl_compositor_create_surface(m->compositor);
+	wl_surface_add_listener(win->surface, &surf_listener, win);
+	win->xdg = xdg_wm_base_get_xdg_surface(m->wm_base, win->surface);
+	xdg_surface_add_listener(win->xdg, &xdg_listener, win);
+	/* Below and right of the point, else above or left of it with the point still
+	 * on the corner, and always on the screen. */
+	struct xdg_positioner *pos = xdg_wm_base_create_positioner(m->wm_base);
+	xdg_positioner_set_size(pos, win->w, win->h);
+	int ax = c->x < 0 ? 0 : c->x >= parent->w ? parent->w - 1 : c->x;
+	int ay = c->y < 0 ? 0 : c->y >= parent->h ? parent->h - 1 : c->y;
+	xdg_positioner_set_anchor_rect(pos, ax, ay, 1, 1);
+	xdg_positioner_set_anchor(pos, XDG_POSITIONER_ANCHOR_TOP_LEFT);
+	xdg_positioner_set_gravity(pos, XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
+	xdg_positioner_set_constraint_adjustment(pos,
+		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X |
+		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y |
+		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X |
+		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y);
+	win->popup = xdg_surface_get_popup(win->xdg, parent->xdg, pos);
+	xdg_positioner_destroy(pos);
+	xdg_popup_add_listener(win->popup, &popup_listener, win);
+	if (c->grab && m->seat) {
+		xdg_popup_grab(win->popup, m->seat, c->serial);
+		win->grab = 1;
+	}
+	wl_surface_commit(win->surface);
+	return win;
+}
+
+void mtk_popup_position(const struct mtk_window *win, int *x, int *y)
+{
+	*x = win->pop_x;
+	*y = win->pop_y;
 }
 
 void mtk_window_set_cursor(struct mtk_window *win, const char *name)

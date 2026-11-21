@@ -180,6 +180,38 @@ TEST(text)
 		pango_font_description_free(dv);
 }
 
+/* Rows of 4 bytes, the ones in ch[] changed. */
+static int damage(const char *ch, int gap, int max, int rows[][2])
+{
+	enum { ROWS = 40 };
+	char a[ROWS][4] = { { 0 } }, b[ROWS][4] = { { 0 } };
+	for (const char *c = ch; *c; c++)
+		b[*c - '0'][1] = 1;
+	return mtk_damage_rows(b, a, 4, ROWS, gap, max, rows);
+}
+
+TEST(damage)
+{
+	int r[4][2];
+	CHECK_INT(damage("", 8, 4, r), 0);              /* nothing changed */
+	CHECK_INT(damage("5", 8, 4, r), 1);
+	CHECK(r[0][0] == 5 && r[0][1] == 1);
+	/* A gap of 8 is no gap, one of 9 is. */
+	CHECK_INT(damage("5=", 8, 4, r), 1);            /* '=' is row 13 */
+	CHECK(r[0][0] == 5 && r[0][1] == 9);
+	CHECK_INT(damage("5>", 8, 4, r), 2);            /* '>' is row 14 */
+	CHECK(r[0][0] == 5 && r[0][1] == 1 && r[1][0] == 14 && r[1][1] == 1);
+	/* At most max: the last takes in the rest. */
+	CHECK_INT(damage("0;FQ", 3, 2, r), 2);          /* rows 0, 11, 22, 33 */
+	CHECK(r[0][0] == 0 && r[0][1] == 1 && r[1][0] == 11 && r[1][1] == 23);
+	CHECK_INT(damage("0;FQ", 3, 4, r), 4);
+	CHECK(r[3][0] == 33 && r[3][1] == 1);
+	/* The ends of the buffer. */
+	CHECK_INT(damage("0W", 100, 4, r), 1);          /* rows 0 and 39 */
+	CHECK(r[0][0] == 0 && r[0][1] == 40);
+	CHECK_INT(damage("5", 8, 0, r), 0);
+}
+
 int main(void)
 {
 	cs = cairo_image_surface_create(CAIRO_FORMAT_RGB24, W, H);
@@ -191,6 +223,7 @@ int main(void)
 	RUN(border);
 	RUN(rgb);
 	RUN(text);
+	RUN(damage);
 	cairo_destroy(cr);
 	cairo_surface_destroy(cs);
 	return unit_done();

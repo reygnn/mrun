@@ -38,6 +38,7 @@ TOP=dddee6      # the light shadow of #aeb2c3
 ACT_TOP=c0c9da  # ... of #7387ad, the border with the keyboard
 BOT=5e6069
 BG=aeb2c3
+SEL=7387ad      # activeBackground: a lit menu item
 
 mkdir -p "$XDG_CONFIG_HOME/mwc"
 : >"$XDG_CONFIG_HOME/mwc/mwmrc"
@@ -172,6 +173,64 @@ check "the wheel, in steps, once per frame" \
 do_input wheel -3
 check "and back" "[ \"\$(ds steps)\" = -1 ] && [ \"\$(ds scrolls)\" = 2 ]"
 
+# ---- held buttons -----------------------------------------------
+# A press sees the buttons held before it.
+do_input move $((X0 + 150)) $((Y0 + 90))
+do_input down left
+do_input down middle
+check "a press sees the left button held" "[ \"\$(ds buttons)\" = 1 ]"
+do_input up middle
+do_input up left
+do_input click left
+check "and none after their release" "[ \"\$(ds buttons)\" = 0 ]"
+
+# ---- a popup -----------------------------------------------------------------------
+# The right button opens a menu below and right of the pointer, with the grab.
+PX=150 PY=50
+menu_up() { pixel_at "$1" $((PX + 60)) $((PY + 14)) $BG; }
+do_input move $((X0 + PX)) $((Y0 + PY))
+do_input click right
+check "the menu is up" "[ \"\$(ds popup)\" = 1 ]"
+menu_up "it is drawn below and right of the pointer"
+do_input key Down
+pixel_at "Down lights the first item" $((PX + 60)) $((PY + 14)) $SEL
+do_input key Return
+check "Return takes it, and the menu goes" "[ \"\$(ds choice)\" = 1 ] && [ \"\$(ds popup)\" = 0 ]"
+pixel_at "it is gone from the screen" $((PX + 60)) $((PY + 14)) f6f6f6
+do_input click right
+menu_up "up again"
+do_input move $((X0 + PX + 60)) $((Y0 + PY + 2 + 24 + 12))
+pixel_at "the pointer lights the second item" $((PX + 60)) $((PY + 2 + 24 + 12)) $SEL
+do_input click left
+check "a click takes it" "[ \"\$(ds choice)\" = 2 ] && [ \"\$(ds popup)\" = 0 ]"
+do_input move $((X0 + PX)) $((Y0 + PY))
+do_input click right
+menu_up "up again"
+do_input key Escape
+check "Esc closes it, nothing taken" "[ \"\$(ds popup)\" = 0 ] && [ \"\$(ds choice)\" = 2 ]"
+check "Esc went to the menu, not the window" "kill -0 $PID_demo"
+do_input click right
+menu_up "up again"
+do_input move $((X0 + 20)) $((Y0 + 100))
+do_input click left
+check "a click on the window beside it closes it" "[ \"\$(ds popup)\" = 0 ]"
+WAYLAND_DISPLAY=wayland-0 build/xdgc app=thief size=200x100 >"$SMOKE_DIR/thief.log" 2>&1 &
+PID_thief=$!
+check "another window is up" "[ -n \"\$(get thief x)\" ]"
+do_input move $((X0 + 150)) $((Y0 + 15))   # above the other window
+do_input click left
+check "the demo has the keyboard" "[ \"\$(ds focus)\" = 1 ]"
+do_input move $((X0 + PX)) $((Y0 + PY))
+do_input click right
+menu_up "up again"
+TX=$(get thief x) TY=$(get thief y)
+do_input move $((TX + 190)) $((TY + 90))
+do_input click left
+check "a click on another client ends it" "[ \"\$(ds popup)\" = 0 ]"
+kill "$PID_thief"
+wait "$PID_thief" 2>/dev/null
+check "the demo has the keyboard again" "[ \"\$(ds focus)\" = 1 ]"
+
 # ---- the loop -------------------------------------------------------------------
 t0=$(ds ticks)
 check "the timer ticks" "[ \"\$(ds ticks)\" -gt $((t0 + 2)) ]"
@@ -234,6 +293,21 @@ check "it paints the maximized size" "[ \"\$(ds size)\" = \"\$(get mtkdemo w)x\$
 do_input key alt+F10
 check "unmaximized, its own size" "[ \"\$(ds size)\" = 300x120 ]"
 check "and mwc's" "[ \"\$(get mtkdemo w)x\$(get mtkdemo h)\" = 300x120 ]"
+quit_demo Escape
+
+# ---- damage -------------------------------------------------------------------
+# A change damages only the rows that changed, not the whole window.
+DEMO_LOG_SAVED=$DEMO_LOG DEMO_LOG=$SMOKE_DIR/damage.log
+WAYLAND_DEBUG=client MTKDEMO_FIXED=1 start_demo
+DEMO_LOG=$DEMO_LOG_SAVED
+check "it has the keyboard" "[ \"\$(ds focus)\" = 1 ]"
+do_input key x
+check "x typed" "[ \"\$(ds text)\" = x ]"
+last_damage_h() {
+	grep -o 'damage_buffer(0, [0-9]*, 300, [0-9]*)' "$SMOKE_DIR/damage.log" | tail -1 |
+		sed 's/.*, \([0-9]*\))$/\1/'
+}
+check "a letter damages only the field's rows" 'h=$(last_damage_h); [ "${h:-120}" -lt 60 ]'
 quit_demo Escape
 
 # ---- a loop of the client's own --------------------------------------------------

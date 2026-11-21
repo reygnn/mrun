@@ -38,6 +38,36 @@ void mtk_shadow(cairo_t *cr, int x, int y, int w, int h, int t,
 	mtk_bevel(cr, x, y, w, h, t, in ? s->bot : s->top, in ? s->top : s->bot);
 }
 
+int mtk_damage_rows(const void *now, const void *was, size_t stride, int h, int gap,
+	int max, int rows[][2])
+{
+	const char *p = now, *q = was;
+	int y0 = 0, y1 = h;
+	/* The ends first, so only what lies between the first and the last change is
+	 * read for gaps. */
+	while (y0 < y1 && !memcmp(p + y0 * stride, q + y0 * stride, stride))
+		y0++;
+	while (y1 > y0 && !memcmp(p + (y1 - 1) * stride, q + (y1 - 1) * stride, stride))
+		y1--;
+	if (y1 == y0 || max < 1)
+		return 0;
+	int n = 0, start = y0, last = y0;
+	for (int y = y0 + 1; y < y1 && n < max - 1; y++) {
+		if (!memcmp(p + y * stride, q + y * stride, stride))
+			continue;
+		if (y - last > gap) {
+			rows[n][0] = start;
+			rows[n][1] = last + 1 - start;
+			n++;
+			start = y;
+		}
+		last = y;
+	}
+	rows[n][0] = start;
+	rows[n][1] = y1 - start;
+	return n + 1;
+}
+
 void mtk_groove_h(cairo_t *cr, int x, int y, int w, const struct mtk_shade *s)
 {
 	mtk_fill(cr, s->bot, x, y, w, 1);
