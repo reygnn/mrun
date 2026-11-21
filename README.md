@@ -3,7 +3,8 @@
 mrun is a run dialog for Wayland in the look of the Motif window manager. It is made
 for [mwc](https://github.com/reygnn/mwc), which opens it with the middle mouse button
 on the desktop, and runs on any Wayland compositor with xdg-shell. One C file on
-libwayland, xkbcommon, Cairo and Pango, no toolkit.
+[mtk](https://github.com/reygnn/mtk), the toolkit of mwc's clients, vendored in `mtk/`:
+libwayland, xkbcommon, Cairo and Pango.
 
 
 ## Build
@@ -73,7 +74,8 @@ Programs run in a session of their own, without a terminal: a terminal program s
 The colours are mwc's: `MWC_INACTIVE` and `MWC_ACTIVE` from the environment, else
 `Mwm*background` and `Mwm*activeBackground` from `$XDG_CONFIG_HOME/mwc/mwmrc` (by
 default `~/.config/mwc/mwmrc`), else the Motif defaults. The text is `Mwm*foreground`
-where it is set, else black or white, whichever reads better.
+where it is set; else the chosen row's is black or white as Motif picks it, as mwc's
+menus, and the list's, on a face of mrun's own, whichever reads better.
 
 
 ## How this is built

@@ -21,5 +21,7 @@ test needs, extend them in mwc.
 
 ## Rules
 
-- Colours and look follow mwc's `src/draw.c` (`mix`, `color_contrast`, the bevels); a
-  change there is made here too.
+- `mtk/` is mtk, vendored with git subtree: changed in mtk's repository and taken
+  with `git subtree pull --prefix=mtk`, never edited here.
+- Colours and look follow mwc through mtk: its colours, Motif's shadows and text
+  colour.

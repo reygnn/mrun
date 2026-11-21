@@ -26,7 +26,7 @@ unset MWC_INACTIVE MWC_ACTIVE MRUN_FONT
 mkdir -p "$HOME"
 : >"$MRUN_LOG"
 SEL=7387ad
-TOP=dbdce4      # the default background's light shade, top and left of a bevel
+TOP=dddee6      # the default background's light shadow, Motif 2.3.8's as mwc's
 MARKS=$SMOKE_DIR/marks
 A=$SMOKE_DIR/bin-a
 Z=$SMOKE_DIR/bin-z
@@ -661,15 +661,15 @@ echo "rows start at $ROW0, $ROWH high"
 do_input move $((CX + 100)) $((CY + ROW0 + ROWH + ROWH / 2))
 do_input click left
 pixel_is "a click chooses" $((CX + 200)) $((CY + ROW0 + ROWH + ROWH / 2)) "$SEL"
-# The chosen name on the active colour, a mid-tone: black reads better on it than white.
-# Inside the bevel, whose light side would count as white.
+# The chosen name on the active colour, a mid-tone: white, as Motif picks it for mwc's
+# armed menu items. Inside the bevel, whose light side is near white.
 black=$(build/pngtool count "$SMOKE_DIR/s.png" $((CX + 12)) $((CY + ROW0 + 2)) \
 	150 $((ROWH - 4)) 000000)
 white=$(build/pngtool count "$SMOKE_DIR/s.png" $((CX + 12)) $((CY + ROW0 + 2)) \
 	150 $((ROWH - 4)) ffffff)
-[ "$black" -gt 0 ] && [ "$white" = 0 ] ||
+[ "$white" -gt 0 ] && [ "$black" = 0 ] ||
 	fail "the chosen name has $black black and $white white pixels"
-echo "ok: the chosen name is black"
+echo "ok: the chosen name is white"
 do_input key Return
 expect_ran "and Return runs that" alphabet ""
 
@@ -854,8 +854,9 @@ mrun_start "$H"
 do_input key Down
 mrun_draws >/dev/null
 pixel_is "the right to left name is chosen" $((CX + 200)) $((CY + ROW0 + ROWH / 2)) "$SEL"
-black=$(build/pngtool count "$SMOKE_DIR/shot.png" $((CX + 12)) $((CY + ROW0 + 2)) 60 $((ROWH - 4)) 000000)
-[ "$black" -gt 0 ] || fail "nothing of the right to left name at the left of its row"
+# White on the chosen row, as Motif picks it.
+ink=$(build/pngtool count "$SMOKE_DIR/shot.png" $((CX + 12)) $((CY + ROW0 + 2)) 60 $((ROWH - 4)) ffffff)
+[ "$ink" -gt 0 ] || fail "nothing of the right to left name at the left of its row"
 echo "ok: a right to left name is drawn from the left"
 mrun_quit
 
