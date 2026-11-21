@@ -32,8 +32,9 @@ chosen.
 
 The chosen row is the active colour with a raised bevel, as an armed menu item in mwc,
 whose text keeps the menu's colour. Unless `Mwm*foreground` is set it is black or white
-by Motif's rule, which on a mid-tone can fall short of WCAG's 4.5:1: on mwc's
-activeBackground `#7387ad` it is white at about 3.8:1.
+by Motif's rule, black on mwc's default light stone. A mid-tone set as the colour can
+fall short of WCAG's 4.5:1: on Motif's old focused blue `#7387ad` it is white at about
+3.6:1.
 
 It needs wl_compositor 4. It draws at the integer scale the compositor asks for with wl_compositor 6. A
 fractional scale is drawn at the next integer and scaled down by the compositor; an

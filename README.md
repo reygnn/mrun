@@ -69,7 +69,7 @@ Programs run in a session of their own, without a terminal: a terminal program s
 | Variable | Default | |
 |---|---|---|
 | `MRUN_FONT` | `Sans 10` | Pango font name, e.g. `Sans Bold 11` |
-| `MWC_INACTIVE`, `MWC_ACTIVE` | `#aeb2c3`, `#7387ad` | background, chosen row |
+| `MWC_INACTIVE`, `MWC_ACTIVE` | `#aaaaaa`, `#c6c1aa` | background, chosen row |
 
 The colours are mwc's: `MWC_INACTIVE` and `MWC_ACTIVE` from the environment, else
 `Mwm*background` and `Mwm*activeBackground` from `$XDG_CONFIG_HOME/mwc/mwmrc` (by
