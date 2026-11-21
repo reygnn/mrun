@@ -1,0 +1,7 @@
+TODO
+
+* Die Clients umstellen, jeder auf seinem Branch: deskControl, pulseControl
+  (libpulse über mtk_before_poll/mtk_after_poll), osDisplay, mrun, mfm.
+* Popups (xdg_popup mit Grab, xdg_wm_base 3 für reposition) für mfm's Menü.
+* Ein Eingabefeld (Cursor, Auswahl, Kürzel) aus mrun und mfm, wenn beide
+  umgestellt sind und dasselbe brauchen.
