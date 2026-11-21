@@ -1103,8 +1103,14 @@ do_input move $((5 * (CX + 20))) $((5 * (CY + 20)))
 check "a new window's cursor at scale 5 has a buffer scale that divides it" "$cursor_ok"
 mrun_quit
 
-[ "$("$MRUN" -v)" = "mrun $(sed -n 's/^#define MRUN_VERSION "\(.*\)"/\1/p' "$MRUN_DIR/version.h")" ] ||
-	fail "-v: $("$MRUN" -v)"
+# The version from version.h, then the commit the build is from where git knows it.
+want=$(sed -n 's/^#define MRUN_VERSION "\([^"]*\)".*/\1/p' "$MRUN_DIR/version.h")
+if commit=$(TZ=UTC0 git -C "$MRUN_DIR" log -1 --format=%cd.%h \
+		--date=format-local:%Y%m%d.%H%M 2>/dev/null); then
+	git -C "$MRUN_DIR" diff --quiet HEAD || commit=$commit.dirty
+	want=$want+$commit
+fi
+[ "$("$MRUN" -v)" = "mrun $want" ] || fail "-v: $("$MRUN" -v), not mrun $want"
 "$MRUN" -v >/dev/null || fail "-v exits with $?"
 echo "ok: -v prints the version"
 "$MRUN" -h 2>/dev/null || fail "-h exits with $?"

@@ -46,7 +46,9 @@ arguments keeps the program that is chosen.
 Programs run in a session of their own, without a terminal: a terminal program such as
 `htop` is started as `foot htop`.
 
-`-v` prints the version, which is set in `version.h`.
+`-v` prints the version, which is set in `version.h`,
+and the commit built, as `VERSION+DATE.TIME.HASH` with its commit time in UTC
+and `.dirty` for changes not committed.
 
 
 ## Keys
