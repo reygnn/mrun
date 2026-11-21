@@ -31,6 +31,13 @@ is moved towards black or white as far as that needs, and `Mwm*foreground` is le
 mwc's titles (`has_fg` is 0). `theme.palette` says that it is on. mwc's
 `docs/mwmrc.irix-schemes` has both for each of IRIX 6.5's schemes.
 
+A list is a face of the clients' own, `theme.list`: `inactive` 30 % towards white.
+mwc's active colour often lands on its brightness (Base's `#c6c1aa` on its list
+`#c4c4c4` has 1.04:1, Buckingham's 1.00:1), so a row selected on it, `theme.select`,
+is that colour moved towards black or white until it has `MTK_SELECT_CONTRAST`, 2:1,
+on the list (`mtk_apart()`). The text on both has 4.5:1. mwc draws no list and keeps
+its colours; its armed menu item stands out by its bevel, not by colour.
+
 
 ## Use
 

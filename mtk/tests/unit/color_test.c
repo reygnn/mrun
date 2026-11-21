@@ -101,6 +101,45 @@ TEST(readable)
 	CHECK_INT(mtk_readable(0x808080, 0x808080, 0x909090), 0x909090);
 }
 
+/* mtk_apart(bg, c) is c a whole number of twentieths towards black or white, and a
+ * twentieth less falls short. */
+static int apart_minimal(uint32_t bg, uint32_t c, float r)
+{
+	uint32_t got = mtk_apart(bg, c, r);
+	for (int k = 1; k <= 20; k++)
+		for (int w = 0; w < 2; w++) {
+			uint32_t to = w ? 0xffffff : 0x000000;
+			if (mtk_mix(c, to, k / 20.0f) == got)
+				return mtk_contrast_ratio(bg, mtk_mix(c, to, (k - 1) / 20.0f)) < r;
+		}
+	return 0;
+}
+
+/* A selection on a list: moved only as far as it needs, the shorter way. */
+TEST(apart)
+{
+	CHECK_INT(mtk_apart(0xc4c4c4, 0x7387ad, 2.0f), 0x7387ad);       /* 2.2:1, as is */
+	/* Base: #c6c1aa on the list #c4c4c4 has 1.04:1; white can't get to 2:1. */
+	uint32_t c = mtk_apart(0xc4c4c4, 0xc6c1aa, 2.0f);
+	CHECK(mtk_contrast_ratio(0xc4c4c4, c) >= 2.0f);
+	CHECK(mtk_luminance(c) < mtk_luminance(0xc6c1aa));
+	CHECK(mtk_contrast_ratio(0xc4c4c4, mtk_mix(c, 0xc6c1aa, 0.06f)) < 2.0f);
+	/* A twentieth at a time: the step before falls short. */
+	static const uint32_t pair[][2] = {
+		{ 0xc4c4c4, 0xc6c1aa }, { 0xa18fa1, 0x9991a6 }, { 0x404040, 0x505050 },
+		{ 0xe0e0e0, 0xd0d8e0 }, { 0x9b9b9b, 0x8c8c8c }, { 0x303848, 0x384050 },
+	};
+	for (size_t i = 0; i < sizeof pair / sizeof pair[0]; i++)
+		CHECK(apart_minimal(pair[i][0], pair[i][1], 2.0f));
+	/* On a dark list the lighter way is the shorter one. */
+	c = mtk_apart(0x404040, 0x505050, 2.0f);
+	CHECK(mtk_luminance(c) > mtk_luminance(0x505050));
+	CHECK(mtk_contrast_ratio(0x404040, c) >= 2.0f);
+	/* Out of reach: black or white, whichever has more. */
+	CHECK_INT(mtk_apart(0x808080, 0x808080, 20.0f), 0x000000);
+	CHECK_INT(mtk_apart(0x202020, 0x202020, 20.0f), 0xffffff);
+}
+
 static int color(const char *s, uint32_t *c)
 {
 	*c = 0xdeadbe;
@@ -142,6 +181,7 @@ int main(void)
 	RUN(wcag);
 	RUN(dimmed);
 	RUN(readable);
+	RUN(apart);
 	RUN(parse_color);
 	return unit_done();
 }

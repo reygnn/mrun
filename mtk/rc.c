@@ -108,6 +108,21 @@ static uint32_t setting(const char *env, const char *res, uint32_t def, int *bui
 	return def;
 }
 
+/* A list and the row selected on it, faces of the clients' own. The list is lighter
+ * than the window; the active colour, as mwc's titles have it, often lands on its
+ * brightness (Base: #c4c4c4 and #c6c1aa, 1.04:1), so the selection is moved apart.
+ * Text that was chosen, set, the palette's or the built-in grey's black, stays as
+ * far as it reads; Motif's own is left for the better of black and white. */
+void mtk_theme_lists(struct mtk_theme *t)
+{
+	uint32_t bg = t->inactive.bg, fg = t->inactive.fg;
+	uint32_t list = mtk_mix(bg, 0xffffff, 0.3f), lbest = mtk_best_contrast(list);
+	int chosen = t->has_fg || t->palette || fg != mtk_text_color(bg);
+	t->list = mtk_shade(list, chosen ? mtk_readable(list, fg, lbest) : lbest);
+	uint32_t sel = mtk_apart(list, t->active.bg, MTK_SELECT_CONTRAST);
+	t->select = mtk_shade(sel, mtk_readable(sel, t->active.fg, mtk_best_contrast(sel)));
+}
+
 void mtk_theme_load(struct mtk_theme *t)
 {
 	/* IRIX 6.5's Base scheme, as mwc's defaults: a grey, and a light stone for
@@ -131,13 +146,14 @@ void mtk_theme_load(struct mtk_theme *t)
 		t->active = mtk_shade(act, mtk_readable(act, t->has_active_fg ? afg : abest,
 			abest));
 		t->has_fg = 0;
-		t->dim = mtk_dimmed(basic, t->inactive.fg);
-		return;
+	} else {
+		/* The built-in grey takes the Base palette's black text, as in mwc;
+		 * Motif would pick white, at 67 %. A grey that is set, #aaaaaa too,
+		 * gets Motif's choice. */
+		t->inactive = mtk_shade(bg, t->has_fg ? fg :
+			color_inactive_text(bg, builtin));
+		t->active = mtk_shade(act, t->has_active_fg ? afg : mtk_text_color(act));
 	}
-	/* The built-in grey takes the Base palette's black text, as in mwc; Motif
-	 * would pick white, at 67 %. A grey that is set, #aaaaaa too, gets Motif's
-	 * choice. */
-	t->inactive = mtk_shade(bg, t->has_fg ? fg : color_inactive_text(bg, builtin));
-	t->active = mtk_shade(act, t->has_active_fg ? afg : mtk_text_color(act));
-	t->dim = mtk_dimmed(bg, t->inactive.fg);
+	t->dim = mtk_dimmed(t->inactive.bg, t->inactive.fg);
+	mtk_theme_lists(t);
 }
